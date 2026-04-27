@@ -50,6 +50,8 @@ import type {
   ExecutorProfileId,
   ImageResponse,
 } from 'shared/types';
+import { ITERATIONS } from '@/constants/iterations';
+import { useSearch } from '@/contexts/SearchContext';
 
 interface Task {
   id: string;
@@ -57,6 +59,7 @@ interface Task {
   title: string;
   description: string | null;
   status: TaskStatus;
+  iteration: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -81,6 +84,7 @@ type TaskFormValues = {
   executorProfileId: ExecutorProfileId | null;
   repoBranches: RepoBranch[];
   autoStart: boolean;
+  iteration: string | null;
 };
 
 const TaskFormDialogImpl = NiceModal.create<TaskFormDialogProps>((props) => {
@@ -93,6 +97,7 @@ const TaskFormDialogImpl = NiceModal.create<TaskFormDialogProps>((props) => {
   const { system, profiles, loading: userSystemLoading } = useUserSystem();
   const { upload, uploadForTask } = useImageUpload();
   const { enableScope, disableScope } = useHotkeysContext();
+  const { iteration: navbarIteration } = useSearch();
 
   // Local UI state
   const [images, setImages] = useState<ImageResponse[]>([]);
@@ -136,6 +141,7 @@ const TaskFormDialogImpl = NiceModal.create<TaskFormDialogProps>((props) => {
           executorProfileId: baseProfile,
           repoBranches: defaultRepoBranches,
           autoStart: false,
+          iteration: props.task.iteration ?? null,
         };
 
       case 'duplicate':
@@ -146,6 +152,7 @@ const TaskFormDialogImpl = NiceModal.create<TaskFormDialogProps>((props) => {
           executorProfileId: baseProfile,
           repoBranches: defaultRepoBranches,
           autoStart: true,
+          iteration: navbarIteration ?? props.initialTask.iteration ?? null,
         };
 
       case 'subtask':
@@ -158,9 +165,10 @@ const TaskFormDialogImpl = NiceModal.create<TaskFormDialogProps>((props) => {
           executorProfileId: baseProfile,
           repoBranches: defaultRepoBranches,
           autoStart: true,
+          iteration: navbarIteration ?? null,
         };
     }
-  }, [mode, props, system.config?.executor_profile, defaultRepoBranches]);
+  }, [mode, props, system.config?.executor_profile, defaultRepoBranches, navbarIteration]);
 
   // Form submission handler
   const handleSubmit = async ({ value }: { value: TaskFormValues }) => {
@@ -174,6 +182,7 @@ const TaskFormDialogImpl = NiceModal.create<TaskFormDialogProps>((props) => {
             status: value.status,
             parent_workspace_id: null,
             image_ids: images.length > 0 ? images.map((img) => img.id) : null,
+            iteration: value.iteration,
           },
         },
         { onSuccess: () => modal.remove() }
@@ -190,6 +199,7 @@ const TaskFormDialogImpl = NiceModal.create<TaskFormDialogProps>((props) => {
           mode === 'subtask' ? props.parentTaskAttemptId : null,
         image_ids: imageIds,
         shared_task_id: null,
+        iteration: value.iteration,
       };
       const shouldAutoStart = value.autoStart && !forceCreateOnlyRef.current;
       if (shouldAutoStart) {
@@ -496,6 +506,40 @@ const TaskFormDialogImpl = NiceModal.create<TaskFormDialogProps>((props) => {
               )}
             </form.Field>
           )}
+
+          {/* Iteration selector (always visible) */}
+          <form.Field name="iteration">
+            {(field) => (
+              <div className="space-y-2">
+                <Label htmlFor="task-iteration" className="text-sm font-medium">
+                  {t('taskFormDialog.iterationLabel')}
+                </Label>
+                <Select
+                  value={field.state.value ?? '__none__'}
+                  onValueChange={(v) =>
+                    field.handleChange(v === '__none__' ? null : v)
+                  }
+                  disabled={isSubmitting}
+                >
+                  <SelectTrigger id="task-iteration">
+                    <SelectValue
+                      placeholder={t('taskFormDialog.noIteration')}
+                    />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">
+                      {t('taskFormDialog.noIteration')}
+                    </SelectItem>
+                    {ITERATIONS.map((it) => (
+                      <SelectItem key={it.value} value={it.value}>
+                        {t('iterations.label', { code: it.value })}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+          </form.Field>
 
           {/* Create mode dropdowns */}
           {!editMode && (

@@ -25,7 +25,11 @@
   },
   "filters": {
     "sharedToggleAria": "Toggle shared tasks",
-    "sharedToggleTooltip": "Show/hide shared content"
+    "sharedToggleTooltip": "Show/hide shared content",
+    "allIterations": "All iterations"
+  },
+  "iterations": {
+    "label": "[{{code}}] Iteration development project"
   },
   "rebase": {
     "common": {
@@ -643,6 +647,8 @@
       "done": "Done",
       "cancelled": "Cancelled"
     },
+    "iterationLabel": "Iteration",
+    "noIteration": "No iteration",
     "startLabel": "Start",
     "attachImage": "Attach image",
     "dropImagesHere": "Drop images here",

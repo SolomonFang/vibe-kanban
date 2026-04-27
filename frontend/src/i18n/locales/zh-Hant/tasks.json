@@ -25,7 +25,11 @@
   },
   "filters": {
     "sharedToggleAria": "切換共享任務",
-    "sharedToggleTooltip": "顯示/隱藏共享內容"
+    "sharedToggleTooltip": "顯示/隱藏共享內容",
+    "allIterations": "全部迭代"
+  },
+  "iterations": {
+    "label": "[{{code}}]迭代開發項目"
   },
   "rebase": {
     "common": {
@@ -566,6 +570,8 @@
       "done": "完成",
       "cancelled": "已取消"
     },
+    "iterationLabel": "迭代",
+    "noIteration": "無迭代",
     "startLabel": "開始",
     "attachImage": "附加圖片",
     "dropImagesHere": "將圖片放在這裡",

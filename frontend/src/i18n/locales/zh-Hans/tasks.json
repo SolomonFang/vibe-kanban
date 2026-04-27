@@ -25,7 +25,11 @@
   },
   "filters": {
     "sharedToggleAria": "切换共享任务",
-    "sharedToggleTooltip": "显示/隐藏共享内容"
+    "sharedToggleTooltip": "显示/隐藏共享内容",
+    "allIterations": "全部迭代"
+  },
+  "iterations": {
+    "label": "[{{code}}]迭代开发项目"
   },
   "rebase": {
     "common": {
@@ -347,14 +351,14 @@
       "branchStatusUnavailable": "无法获取分支状态。您仍然可以更改目标分支。"
     },
     "pr": {
-      "open": "打开 PR #{{number}}",
-      "number": "PR #{{number}}",
-      "merged": "已合并PR #{{prNumber}}"
+      "open": "打开拉取请求 #{{number}}",
+      "number": "拉取请求 #{{number}}",
+      "merged": "已合并拉取请求 #{{prNumber}}"
     },
     "actions": {
       "title": "Git 操作",
       "changeTarget": "更改目标",
-      "prMerged": "PR #{{number}} 已合并",
+      "prMerged": "拉取请求 #{{number}} 已合并",
       "loginRequired": {
         "title": "登录以管理 git 操作",
         "description": "登录 Vibe Kanban，以便您可以推送分支、合并更改或为此任务打开拉取请求。",
@@ -372,7 +376,7 @@
       },
       "form": {
         "nameLabel": "名称",
-        "namePlaceholder": "my-project",
+        "namePlaceholder": "我的项目",
         "locationLabel": "位置",
         "locationPlaceholder": "当前目录"
       },
@@ -566,6 +570,8 @@
       "done": "完成",
       "cancelled": "已取消"
     },
+    "iterationLabel": "迭代",
+    "noIteration": "无迭代",
     "startLabel": "开始",
     "attachImage": "附加图片",
     "dropImagesHere": "在此处放置图片",
@@ -659,7 +665,7 @@
       "approve": "批准",
       "clearReviewComments": "清除审查评论",
       "edit": "编辑消息",
-      "scrollToPreviousMessage": "Go to previous message",
+      "scrollToPreviousMessage": "跳转到上一条消息",
       "reset": "重置",
       "resetTooltip": "重置到此时点"
     },

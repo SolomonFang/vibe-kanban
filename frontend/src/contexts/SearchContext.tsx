@@ -12,6 +12,8 @@ import { useLocation, useParams } from 'react-router-dom';
 interface SearchState {
   query: string;
   setQuery: (query: string) => void;
+  iteration: string | null;
+  setIteration: (iteration: string | null) => void;
   active: boolean;
   clear: () => void;
   focusInput: () => void;
@@ -26,6 +28,7 @@ interface SearchProviderProps {
 
 export function SearchProvider({ children }: SearchProviderProps) {
   const [query, setQuery] = useState('');
+  const [iteration, setIteration] = useState<string | null>(null);
   const location = useLocation();
   const { projectId } = useParams<{ projectId: string }>();
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -35,19 +38,24 @@ export function SearchProvider({ children }: SearchProviderProps) {
     location.pathname
   );
 
-  // Clear search when leaving tasks pages
+  // Clear search and iteration when leaving tasks pages
   useEffect(() => {
-    if (!isTasksRoute && query !== '') {
-      setQuery('');
+    if (!isTasksRoute) {
+      if (query !== '') setQuery('');
+      if (iteration !== null) setIteration(null);
     }
-  }, [isTasksRoute, query]);
+  }, [isTasksRoute, query, iteration]);
 
-  // Clear search when project changes
+  // Clear search and iteration when project changes
   useEffect(() => {
     setQuery('');
+    setIteration(null);
   }, [projectId]);
 
-  const clear = () => setQuery('');
+  const clear = () => {
+    setQuery('');
+    setIteration(null);
+  };
 
   const focusInput = () => {
     if (inputRef.current && isTasksRoute) {
@@ -62,6 +70,8 @@ export function SearchProvider({ children }: SearchProviderProps) {
   const value: SearchState = {
     query,
     setQuery,
+    iteration,
+    setIteration,
     active: isTasksRoute,
     clear,
     focusInput,

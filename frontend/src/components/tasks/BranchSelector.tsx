@@ -1,3 +1,4 @@
+'use no memo';
 import { useState, useMemo, useRef, useEffect, useCallback, memo } from 'react';
 import { Virtuoso, VirtuosoHandle } from 'react-virtuoso';
 import { useTranslation } from 'react-i18next';

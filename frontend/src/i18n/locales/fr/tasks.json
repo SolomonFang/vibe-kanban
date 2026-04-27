@@ -25,7 +25,11 @@
   },
   "filters": {
     "sharedToggleAria": "Basculer les tâches partagées",
-    "sharedToggleTooltip": "Afficher/masquer le contenu partagé"
+    "sharedToggleTooltip": "Afficher/masquer le contenu partagé",
+    "allIterations": "Toutes les itérations"
+  },
+  "iterations": {
+    "label": "[{{code}}] Projet de développement d'itération"
   },
   "rebase": {
     "common": {
@@ -643,6 +647,8 @@
       "done": "Terminé",
       "cancelled": "Annulé"
     },
+    "iterationLabel": "Itération",
+    "noIteration": "Aucune itération",
     "startLabel": "Démarrer",
     "attachImage": "Joindre une image",
     "dropImagesHere": "Déposez les images ici",

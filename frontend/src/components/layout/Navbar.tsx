@@ -10,6 +10,13 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
   FolderOpen,
   Settings,
   BookOpen,
@@ -40,6 +47,7 @@ import {
 import { OAuthDialog } from '@/components/dialogs/global/OAuthDialog';
 import { useUserSystem } from '@/components/ConfigProvider';
 import { oauthApi } from '@/lib/api';
+import { ITERATIONS } from '@/constants/iterations';
 
 const INTERNAL_NAV = [
   { label: 'Projects', icon: FolderOpen, to: '/local-projects' },
@@ -77,7 +85,7 @@ export function Navbar() {
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const { projectId, project } = useProject();
-  const { query, setQuery, active, clear, registerInputRef } = useSearch();
+  const { query, setQuery, iteration, setIteration, active, clear, registerInputRef } = useSearch();
   const handleOpenInEditor = useOpenProjectInEditor(project || null);
   const { data: onlineCount } = useDiscordOnlineCount();
   const { loginStatus, reloadSystem } = useUserSystem();
@@ -149,32 +157,6 @@ export function Navbar() {
             <Link to="/local-projects">
               <Logo />
             </Link>
-            <a
-              href="https://discord.gg/AC4nwVtJM3"
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label="Join our Discord"
-              className="hidden sm:inline-flex items-center ml-3 text-xs font-medium overflow-hidden border h-6"
-            >
-              <span className="bg-muted text-foreground flex items-center p-2 border-r">
-                <svg
-                  className="h-4 w-4"
-                  viewBox="0 0 24 24"
-                  fill="currentColor"
-                  aria-hidden="true"
-                >
-                  <path d={siDiscord.path} />
-                </svg>
-              </span>
-              <span
-                className=" h-full items-center flex p-2"
-                aria-live="polite"
-              >
-                {onlineCount != null
-                  ? `${onlineCount.toLocaleString()} online`
-                  : 'online'}
-              </span>
-            </a>
           </div>
 
           <div className="hidden sm:flex items-center gap-2">
@@ -187,6 +169,26 @@ export function Navbar() {
               onClear={clear}
               project={project || null}
             />
+            {active && (
+              <Select
+                value={iteration ?? '__all__'}
+                onValueChange={(v) => setIteration(v === '__all__' ? null : v)}
+              >
+                <SelectTrigger className="h-8 w-44 bg-muted">
+                  <SelectValue placeholder={t('tasks:filters.allIterations')} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__all__">
+                    {t('tasks:filters.allIterations')}
+                  </SelectItem>
+                  {ITERATIONS.map((it) => (
+                    <SelectItem key={it.value} value={it.value}>
+                      {t('tasks:iterations.label', { code: it.value })}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
           </div>
 
           <div className="flex flex-1 items-center justify-end gap-1">

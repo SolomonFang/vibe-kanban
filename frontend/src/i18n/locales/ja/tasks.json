@@ -19,7 +19,11 @@
   },
   "filters": {
     "sharedToggleAria": "共有タスクを切り替える",
-    "sharedToggleTooltip": "共有コンテンツを表示/非表示"
+    "sharedToggleTooltip": "共有コンテンツを表示/非表示",
+    "allIterations": "すべてのイテレーション"
+  },
+  "iterations": {
+    "label": "[{{code}}] イテレーション開発プロジェクト"
   },
   "actionsMenu": {
     "attempt": "Attempt",
@@ -566,6 +570,8 @@
       "done": "完了",
       "cancelled": "キャンセル"
     },
+    "iterationLabel": "イテレーション",
+    "noIteration": "イテレーションなし",
     "startLabel": "開始",
     "attachImage": "画像を添付",
     "dropImagesHere": "画像をここにドロップ",

@@ -254,8 +254,8 @@
     "noResults": "未找到结果。",
     "back": "返回",
     "defaultPlaceholder": "输入命令或搜索...",
-    "selectBranch": "Select Branch",
-    "selectBranchFor": "Select Branch for {{repoName}}"
+    "selectBranch": "选择分支",
+    "selectBranchFor": "为 {{repoName}} 选择分支"
   },
   "chatBox": {
     "variants": "变体",

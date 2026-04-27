@@ -268,6 +268,11 @@ pub async fn update_task(
     let parent_workspace_id = payload
         .parent_workspace_id
         .or(existing_task.parent_workspace_id);
+    let iteration = match payload.iteration {
+        Some(s) if s.trim().is_empty() => None,
+        Some(s) => Some(s),
+        None => existing_task.iteration,
+    };
 
     let task = Task::update(
         &deployment.db().pool,
@@ -277,6 +282,7 @@ pub async fn update_task(
         description,
         status,
         parent_workspace_id,
+        iteration,
     )
     .await?;
 

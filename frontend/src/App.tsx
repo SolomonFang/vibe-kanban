@@ -30,8 +30,6 @@ import { HotkeysProvider } from 'react-hotkeys-hook';
 
 import { ProjectProvider } from '@/contexts/ProjectContext';
 import { ThemeMode } from 'shared/types';
-import * as Sentry from '@sentry/react';
-
 import { DisclaimerDialog } from '@/components/dialogs/global/DisclaimerDialog';
 import { OnboardingDialog } from '@/components/dialogs/global/OnboardingDialog';
 import { ReleaseNotesDialog } from '@/components/dialogs/global/ReleaseNotesDialog';
@@ -50,8 +48,6 @@ import { WorkspacesLanding } from '@/pages/ui-new/WorkspacesLanding';
 import { ElectricTestPage } from '@/pages/ui-new/ElectricTestPage';
 import { ProjectKanban } from '@/pages/ui-new/ProjectKanban';
 import { MigratePage } from '@/pages/ui-new/MigratePage';
-
-const SentryRoutes = Sentry.withSentryReactRouterV6Routing(Routes);
 
 function AppContent() {
   const { config, analyticsUserId, updateAndSaveConfig } = useUserSystem();
@@ -138,7 +134,7 @@ function AppContent() {
     <I18nextProvider i18n={i18n}>
       <ThemeProvider initialTheme={config?.theme || ThemeMode.SYSTEM}>
         <SearchProvider>
-          <SentryRoutes>
+          <Routes>
             {/* ========== LEGACY DESIGN ROUTES ========== */}
             {/* VS Code full-page logs route (outside NormalLayout for minimal UI) */}
             <Route
@@ -249,7 +245,7 @@ function AppContent() {
               {/* Migration route */}
               <Route path="/migrate" element={<MigratePage />} />
             </Route>
-          </SentryRoutes>
+          </Routes>
         </SearchProvider>
       </ThemeProvider>
     </I18nextProvider>

@@ -19,7 +19,11 @@
   },
   "filters": {
     "sharedToggleAria": "Alternar tareas compartidas",
-    "sharedToggleTooltip": "Mostrar/ocultar contenido compartido"
+    "sharedToggleTooltip": "Mostrar/ocultar contenido compartido",
+    "allIterations": "Todas las iteraciones"
+  },
+  "iterations": {
+    "label": "[{{code}}] Proyecto de desarrollo de iteración"
   },
   "actionsMenu": {
     "attempt": "Attempt",
@@ -566,6 +570,8 @@
       "done": "Completado",
       "cancelled": "Cancelado"
     },
+    "iterationLabel": "Iteración",
+    "noIteration": "Sin iteración",
     "startLabel": "Iniciar",
     "attachImage": "Adjuntar imagen",
     "dropImagesHere": "Suelta las imágenes aquí",

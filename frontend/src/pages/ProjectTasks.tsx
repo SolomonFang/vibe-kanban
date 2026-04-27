@@ -169,7 +169,7 @@ export function ProjectTasks() {
       openTaskForm({ mode: 'create', projectId });
     }
   }, [projectId]);
-  const { query: searchQuery, focusInput } = useSearch();
+  const { query: searchQuery, iteration: searchIteration, focusInput } = useSearch();
 
   const {
     tasks,
@@ -400,8 +400,15 @@ export function ProjectTasks() {
       );
     };
 
+    const matchesIteration = (taskIteration: string | null | undefined): boolean =>
+      !searchIteration || taskIteration === searchIteration;
+
     tasks.forEach((task) => {
       const statusKey = normalizeStatus(task.status);
+
+      if (!matchesIteration(task.iteration)) {
+        return;
+      }
 
       if (!matchesSearch(task.title, task.description)) {
         return;
@@ -418,7 +425,7 @@ export function ProjectTasks() {
     });
 
     return columns;
-  }, [hasSearch, normalizedSearch, tasks]);
+  }, [hasSearch, normalizedSearch, searchIteration, tasks]);
 
   const visibleTasksByStatus = useMemo(() => {
     const map: Record<TaskStatus, Task[]> = {
