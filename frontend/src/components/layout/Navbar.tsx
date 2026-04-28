@@ -1,6 +1,5 @@
 import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import { useCallback } from 'react';
-import { siDiscord } from 'simple-icons';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -35,7 +34,6 @@ import { useProject } from '@/contexts/ProjectContext';
 import { useOpenProjectInEditor } from '@/hooks/useOpenProjectInEditor';
 import { OpenInIdeButton } from '@/components/ide/OpenInIdeButton';
 import { useProjectRepos } from '@/hooks';
-import { useDiscordOnlineCount } from '@/hooks/useDiscordOnlineCount';
 import { useTranslation } from 'react-i18next';
 import { Switch } from '@/components/ui/switch';
 import {
@@ -87,7 +85,6 @@ export function Navbar() {
   const { projectId, project } = useProject();
   const { query, setQuery, iteration, setIteration, active, clear, registerInputRef } = useSearch();
   const handleOpenInEditor = useOpenProjectInEditor(project || null);
-  const { data: onlineCount } = useDiscordOnlineCount();
   const { loginStatus, reloadSystem } = useUserSystem();
 
   const { data: repos } = useProjectRepos(projectId);

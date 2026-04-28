@@ -1,9 +1,9 @@
 {
-  "name": "kanban18",
+  "name": "helios-kanban",
   "version": "0.1.9",
   "private": true,
   "bin": {
-    "kanban18": "npx-cli/bin/cli.js"
+    "helios-kanban": "npx-cli/bin/cli.js"
   },
   "files": [
     "npx-cli/bin/cli.js",

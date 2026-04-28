@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "UPDATE repos\n               SET display_name = $1,\n                   setup_script = $2,\n                   cleanup_script = $3,\n                   archive_script = $4,\n                   copy_files = $5,\n                   parallel_setup_script = $6,\n                   dev_server_script = $7,\n                   default_target_branch = $8,\n                   default_working_dir = $9,\n                   updated_at = datetime('now', 'subsec')\n               WHERE id = $10\n               RETURNING id as \"id!: Uuid\",\n                         path,\n                         name,\n                         display_name,\n                         setup_script,\n                         cleanup_script,\n                         archive_script,\n                         copy_files,\n                         parallel_setup_script as \"parallel_setup_script!: bool\",\n                         dev_server_script,\n                         default_target_branch,\n                         default_working_dir,\n                         created_at as \"created_at!: DateTime<Utc>\",\n                         updated_at as \"updated_at!: DateTime<Utc>\"",
+  "query": "SELECT id as \"id!: Uuid\",\n                      path,\n                      name,\n                      display_name,\n                      setup_script,\n                      cleanup_script,\n                      archive_script,\n                      copy_files,\n                       parallel_setup_script as \"parallel_setup_script!: bool\",\n                       use_worktree as \"use_worktree!: bool\",\n                       dev_server_script,\n                      default_target_branch,\n                      default_working_dir,\n                      created_at as \"created_at!: DateTime<Utc>\",\n                      updated_at as \"updated_at!: DateTime<Utc>\"\n               FROM repos\n                WHERE name = '__NEEDS_BACKFILL__'",
   "describe": {
     "columns": [
       {
@@ -49,33 +49,38 @@
         "type_info": "Integer"
       },
       {
-        "name": "dev_server_script",
+        "name": "use_worktree!: bool",
         "ordinal": 9,
-        "type_info": "Text"
+        "type_info": "Bool"
       },
       {
-        "name": "default_target_branch",
+        "name": "dev_server_script",
         "ordinal": 10,
         "type_info": "Text"
       },
       {
-        "name": "default_working_dir",
+        "name": "default_target_branch",
         "ordinal": 11,
         "type_info": "Text"
       },
       {
-        "name": "created_at!: DateTime<Utc>",
+        "name": "default_working_dir",
         "ordinal": 12,
         "type_info": "Text"
       },
       {
-        "name": "updated_at!: DateTime<Utc>",
+        "name": "created_at!: DateTime<Utc>",
         "ordinal": 13,
+        "type_info": "Text"
+      },
+      {
+        "name": "updated_at!: DateTime<Utc>",
+        "ordinal": 14,
         "type_info": "Text"
       }
     ],
     "parameters": {
-      "Right": 10
+      "Right": 0
     },
     "nullable": [
       true,
@@ -87,6 +92,7 @@
       true,
       true,
       false,
+      false,
       true,
       true,
       true,
@@ -94,5 +100,5 @@
       false
     ]
   },
-  "hash": "79f6b9f999c33900ae87475d72651b274cc94ab3b1f36e9c5517bc5572ea9947"
+  "hash": "69b8ed5d7778968ee1d65289b12ecb863d5ba6e5d94d0dff3570bbaeddb0da7f"
 }

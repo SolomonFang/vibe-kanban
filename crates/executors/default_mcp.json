@@ -1,9 +1,9 @@
 {
-  "vibe_kanban": {
+  "helios_kanban": {
     "command": "npx",
     "args": [
       "-y",
-      "vibe-kanban@latest",
+      "helios-kanban@latest",
       "--mcp"
     ]
   },
@@ -45,8 +45,8 @@
     ]
   },
   "meta": {
-    "vibe_kanban": {
-      "name": "Vibe Kanban",
+    "helios_kanban": {
+      "name": "Helios Kanban",
       "description": "Create, update and delete Vibe Kanban tasks",
       "url": "https://www.vibekanban.com/docs/integrations/vibe-kanban-mcp-server",
       "icon": "favicon-vk-light.svg"

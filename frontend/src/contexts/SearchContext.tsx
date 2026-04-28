@@ -7,7 +7,8 @@ import {
   useCallback,
   ReactNode,
 } from 'react';
-import { useLocation, useParams } from 'react-router-dom';
+import { useLocation } from 'react-router-dom';
+import { useProject } from '@/contexts/ProjectContext';
 
 const ITERATION_STORAGE_KEY = 'vibe-kanban:iteration';
 
@@ -53,7 +54,7 @@ export function SearchProvider({ children }: SearchProviderProps) {
   const [query, setQuery] = useState('');
   const [iteration, setIteration] = useState<string | null>(null);
   const location = useLocation();
-  const { projectId } = useParams<{ projectId: string }>();
+  const { projectId } = useProject();
   const inputRef = useRef<HTMLInputElement | null>(null);
   const prevProjectRef = useRef(projectId);
 
@@ -64,11 +65,9 @@ export function SearchProvider({ children }: SearchProviderProps) {
 
   // Restore iteration from localStorage when project changes
   useEffect(() => {
-    if (projectId && projectId !== prevProjectRef.current) {
       prevProjectRef.current = projectId;
-      const stored = getStoredIteration(projectId);
+      const stored = getStoredIteration(projectId || '');
       setIteration(stored);
-    }
   }, [projectId]);
 
   // Persist iteration to localStorage on change
@@ -83,13 +82,11 @@ export function SearchProvider({ children }: SearchProviderProps) {
   useEffect(() => {
     if (!isTasksRoute) {
       if (query !== '') setQuery('');
-      if (iteration !== null) setIteration(null);
     }
   }, [isTasksRoute, query, iteration]);
 
   const clear = () => {
     setQuery('');
-    setIteration(null);
     if (projectId) {
       setStoredIteration(projectId, null);
     }

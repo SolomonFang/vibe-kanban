@@ -1,0 +1,104 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE repos\n               SET display_name = $1,\n                   setup_script = $2,\n                   cleanup_script = $3,\n                   archive_script = $4,\n                   copy_files = $5,\n                   parallel_setup_script = $6,\n                   use_worktree = $7,\n                   dev_server_script = $8,\n                   default_target_branch = $9,\n                   default_working_dir = $10,\n                   updated_at = datetime('now', 'subsec')\n               WHERE id = $11\n               RETURNING id as \"id!: Uuid\",\n                         path,\n                         name,\n                         display_name,\n                         setup_script,\n                         cleanup_script,\n                         archive_script,\n                         copy_files,\n                         parallel_setup_script as \"parallel_setup_script!: bool\",\n                         use_worktree as \"use_worktree!: bool\",\n                         dev_server_script,\n                         default_target_branch,\n                         default_working_dir,\n                         created_at as \"created_at!: DateTime<Utc>\",\n                         updated_at as \"updated_at!: DateTime<Utc>\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: Uuid",
+        "ordinal": 0,
+        "type_info": "Blob"
+      },
+      {
+        "name": "path",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "name",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "display_name",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "setup_script",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "cleanup_script",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "archive_script",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "copy_files",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "parallel_setup_script!: bool",
+        "ordinal": 8,
+        "type_info": "Integer"
+      },
+      {
+        "name": "use_worktree!: bool",
+        "ordinal": 9,
+        "type_info": "Bool"
+      },
+      {
+        "name": "dev_server_script",
+        "ordinal": 10,
+        "type_info": "Text"
+      },
+      {
+        "name": "default_target_branch",
+        "ordinal": 11,
+        "type_info": "Text"
+      },
+      {
+        "name": "default_working_dir",
+        "ordinal": 12,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_at!: DateTime<Utc>",
+        "ordinal": 13,
+        "type_info": "Text"
+      },
+      {
+        "name": "updated_at!: DateTime<Utc>",
+        "ordinal": 14,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 11
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "24ee069ba9627d9eb7fd6b4e0f6578e56e92df624a63cdad8072d516b133d9d0"
+}

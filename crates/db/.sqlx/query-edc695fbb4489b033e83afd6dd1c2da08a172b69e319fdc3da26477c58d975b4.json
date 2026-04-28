@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT r.id as \"id!: Uuid\", r.path, r.name, r.copy_files\n               FROM repos r\n               JOIN workspace_repos wr ON r.id = wr.repo_id\n               WHERE wr.workspace_id = $1",
+  "query": "SELECT r.id as \"id!: Uuid\", r.path, r.name, r.copy_files,\n                      r.use_worktree as \"use_worktree!: bool\"\n               FROM repos r\n               JOIN workspace_repos wr ON r.id = wr.repo_id\n               WHERE wr.workspace_id = $1",
   "describe": {
     "columns": [
       {
@@ -22,6 +22,11 @@
         "name": "copy_files",
         "ordinal": 3,
         "type_info": "Text"
+      },
+      {
+        "name": "use_worktree!: bool",
+        "ordinal": 4,
+        "type_info": "Bool"
       }
     ],
     "parameters": {
@@ -31,8 +36,9 @@
       true,
       false,
       false,
-      true
+      true,
+      false
     ]
   },
-  "hash": "5ff9809face43fe1f071dfda62b6a30f4a32a9aaace29caf89b95c224482201b"
+  "hash": "edc695fbb4489b033e83afd6dd1c2da08a172b69e319fdc3da26477c58d975b4"
 }

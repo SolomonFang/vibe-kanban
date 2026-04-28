@@ -1,10 +1,10 @@
 {
-  "name": "kanban18",
+  "name": "helios-kanban",
   "private": false,
-  "version": "0.1.9",
+  "version": "0.1.10",
   "main": "index.js",
   "bin": {
-    "kanban18": "bin/cli.js"
+    "helios-kanban": "bin/cli.js"
   },
   "keywords": [],
   "author": "bloop",
