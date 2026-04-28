@@ -96,6 +96,14 @@ pub trait ContainerService {
 
     fn workspace_to_current_dir(&self, workspace: &Workspace) -> PathBuf;
 
+    fn repo_work_dir(&self, workspace_root: &Path, repo: &Repo) -> PathBuf {
+        workspace_root.join(&repo.name)
+    }
+
+    fn repo_script_working_dir(&self, repo: &Repo) -> Option<String> {
+        repo.use_worktree.then(|| repo.name.clone())
+    }
+
     async fn available_agent_slash_commands(
         &self,
         executor_profile_id: ExecutorProfileId,
@@ -116,10 +124,19 @@ pub trait ContainerService {
                 return Err(ContainerError::Other(anyhow!("Workspace path is empty")));
             }
 
+            let repositories =
+                WorkspaceRepo::find_repos_for_workspace(&self.db().pool, workspace.id)
+                    .await
+                    .unwrap_or_default();
             let workspace_path = PathBuf::from(container_ref);
+            let base_path = if repositories.len() == 1 && !repositories[0].use_worktree {
+                repositories[0].path.clone()
+            } else {
+                workspace_path
+            };
             match workspace.agent_working_dir.as_deref() {
-                Some(dir) if !dir.is_empty() => Some(workspace_path.join(dir)),
-                _ => Some(workspace_path),
+                Some(dir) if !dir.is_empty() => Some(base_path.join(dir)),
+                _ => Some(base_path),
             }
         } else if let Some(repo_id) = repo_id {
             Repo::find_by_id(&self.db().pool, repo_id)
@@ -284,7 +301,7 @@ pub trait ContainerService {
             {
                 let workspace_root = PathBuf::from(container_ref);
                 for repo in &ctx.repos {
-                    let repo_path = workspace_root.join(&repo.name);
+                    let repo_path = self.repo_work_dir(&workspace_root, repo);
                     if let Ok(head) = self.git().get_head_info(&repo_path)
                         && let Err(err) = ExecutionProcessRepoState::update_after_head_commit(
                             &self.db().pool,
@@ -423,7 +440,7 @@ pub trait ContainerService {
                 script: first.cleanup_script.clone().unwrap(),
                 language: ScriptRequestLanguage::Bash,
                 context: ScriptContext::CleanupScript,
-                working_dir: Some(first.name.clone()),
+                working_dir: self.repo_script_working_dir(first),
             }),
             None,
         );
@@ -434,7 +451,7 @@ pub trait ContainerService {
                     script: repo.cleanup_script.clone().unwrap(),
                     language: ScriptRequestLanguage::Bash,
                     context: ScriptContext::CleanupScript,
-                    working_dir: Some(repo.name.clone()),
+                    working_dir: self.repo_script_working_dir(repo),
                 }),
                 None,
             ));
@@ -460,7 +477,7 @@ pub trait ContainerService {
                 script: first.archive_script.clone().unwrap(),
                 language: ScriptRequestLanguage::Bash,
                 context: ScriptContext::ArchiveScript,
-                working_dir: Some(first.name.clone()),
+                working_dir: self.repo_script_working_dir(first),
             }),
             None,
         );
@@ -471,7 +488,7 @@ pub trait ContainerService {
                     script: repo.archive_script.clone().unwrap(),
                     language: ScriptRequestLanguage::Bash,
                     context: ScriptContext::ArchiveScript,
-                    working_dir: Some(repo.name.clone()),
+                    working_dir: self.repo_script_working_dir(repo),
                 }),
                 None,
             ));
@@ -574,7 +591,7 @@ pub trait ContainerService {
                 script: first.setup_script.clone().unwrap(),
                 language: ScriptRequestLanguage::Bash,
                 context: ScriptContext::SetupScript,
-                working_dir: Some(first.name.clone()),
+                working_dir: self.repo_script_working_dir(first),
             }),
             None,
         );
@@ -585,7 +602,7 @@ pub trait ContainerService {
                     script: repo.setup_script.clone().unwrap(),
                     language: ScriptRequestLanguage::Bash,
                     context: ScriptContext::SetupScript,
-                    working_dir: Some(repo.name.clone()),
+                    working_dir: self.repo_script_working_dir(repo),
                 }),
                 None,
             ));
@@ -594,14 +611,14 @@ pub trait ContainerService {
         Some(root_action)
     }
 
-    fn setup_action_for_repo(repo: &Repo) -> Option<ExecutorAction> {
+    fn setup_action_for_repo(&self, repo: &Repo) -> Option<ExecutorAction> {
         repo.setup_script.as_ref().map(|script| {
             ExecutorAction::new(
                 ExecutorActionType::ScriptRequest(ScriptRequest {
                     script: script.clone(),
                     language: ScriptRequestLanguage::Bash,
                     context: ScriptContext::SetupScript,
-                    working_dir: Some(repo.name.clone()),
+                    working_dir: self.repo_script_working_dir(repo),
                 }),
                 None,
             )
@@ -609,6 +626,7 @@ pub trait ContainerService {
     }
 
     fn build_sequential_setup_chain(
+        &self,
         repos: &[&Repo],
         next_action: ExecutorAction,
     ) -> ExecutorAction {
@@ -620,7 +638,7 @@ pub trait ContainerService {
                         script: script.clone(),
                         language: ScriptRequestLanguage::Bash,
                         context: ScriptContext::SetupScript,
-                        working_dir: Some(repo.name.clone()),
+                        working_dir: self.repo_script_working_dir(repo),
                     }),
                     Some(Box::new(chained)),
                 );
@@ -683,7 +701,7 @@ pub trait ContainerService {
                 }
             };
 
-            let worktree_path = workspace_dir.join(&repo.name);
+            let worktree_path = self.repo_work_dir(&workspace_dir, &repo);
             if let Some(oid) = target_oid {
                 self.git().reconcile_worktree_to_commit(
                     &worktree_path,
@@ -1164,7 +1182,7 @@ pub trait ContainerService {
         let execution_process = if all_parallel {
             // All parallel: start each setup independently, then start coding agent
             for repo in &repos_with_setup {
-                if let Some(action) = Self::setup_action_for_repo(repo)
+                if let Some(action) = self.setup_action_for_repo(repo)
                     && let Err(e) = self
                         .start_execution(
                             &workspace,
@@ -1186,7 +1204,7 @@ pub trait ContainerService {
             .await?
         } else {
             // Any sequential: chain ALL setups → coding agent via next_action
-            let main_action = Self::build_sequential_setup_chain(&repos_with_setup, coding_action);
+            let main_action = self.build_sequential_setup_chain(&repos_with_setup, coding_action);
             self.start_execution(
                 &workspace,
                 &session,
@@ -1234,7 +1252,7 @@ pub trait ContainerService {
 
         let mut repo_states = Vec::with_capacity(repositories.len());
         for repo in &repositories {
-            let repo_path = workspace_root.join(&repo.name);
+            let repo_path = self.repo_work_dir(&workspace_root, &repo);
             let before_head_commit = self.git().get_head_info(&repo_path).ok().map(|h| h.oid);
             repo_states.push(CreateExecutionProcessRepoState {
                 repo_id: repo.id,

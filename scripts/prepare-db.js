@@ -8,7 +8,6 @@ const checkMode = process.argv.includes('--check');
 
 console.log(checkMode ? 'Checking SQLx prepared queries...' : 'Preparing database for SQLx...');
 
-// Change to backend directory
 const backendDir = path.join(__dirname, '..', 'crates/db');
 process.chdir(backendDir);
 

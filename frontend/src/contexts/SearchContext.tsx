@@ -9,6 +9,29 @@ import {
 } from 'react';
 import { useLocation, useParams } from 'react-router-dom';
 
+const ITERATION_STORAGE_KEY = 'vibe-kanban:iteration';
+
+function getStoredIteration(projectId: string): string | null {
+  try {
+    const raw = localStorage.getItem(`${ITERATION_STORAGE_KEY}:${projectId}`);
+    return raw ? (JSON.parse(raw) as string) : null;
+  } catch {
+    return null;
+  }
+}
+
+function setStoredIteration(projectId: string, value: string | null): void {
+  try {
+    if (value) {
+      localStorage.setItem(`${ITERATION_STORAGE_KEY}:${projectId}`, JSON.stringify(value));
+    } else {
+      localStorage.removeItem(`${ITERATION_STORAGE_KEY}:${projectId}`);
+    }
+  } catch {
+    // ignore
+  }
+}
+
 interface SearchState {
   query: string;
   setQuery: (query: string) => void;
@@ -32,11 +55,29 @@ export function SearchProvider({ children }: SearchProviderProps) {
   const location = useLocation();
   const { projectId } = useParams<{ projectId: string }>();
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const prevProjectRef = useRef(projectId);
 
   // Check if we're on a tasks route
   const isTasksRoute = /^\/local-projects\/[^/]+\/tasks/.test(
     location.pathname
   );
+
+  // Restore iteration from localStorage when project changes
+  useEffect(() => {
+    if (projectId && projectId !== prevProjectRef.current) {
+      prevProjectRef.current = projectId;
+      const stored = getStoredIteration(projectId);
+      setIteration(stored);
+    }
+  }, [projectId]);
+
+  // Persist iteration to localStorage on change
+  const handleSetIteration = useCallback((value: string | null) => {
+    setIteration(value);
+    if (projectId) {
+      setStoredIteration(projectId, value);
+    }
+  }, [projectId]);
 
   // Clear search and iteration when leaving tasks pages
   useEffect(() => {
@@ -46,15 +87,12 @@ export function SearchProvider({ children }: SearchProviderProps) {
     }
   }, [isTasksRoute, query, iteration]);
 
-  // Clear search and iteration when project changes
-  useEffect(() => {
-    setQuery('');
-    setIteration(null);
-  }, [projectId]);
-
   const clear = () => {
     setQuery('');
     setIteration(null);
+    if (projectId) {
+      setStoredIteration(projectId, null);
+    }
   };
 
   const focusInput = () => {
@@ -71,7 +109,7 @@ export function SearchProvider({ children }: SearchProviderProps) {
     query,
     setQuery,
     iteration,
-    setIteration,
+    setIteration: handleSetIteration,
     active: isTasksRoute,
     clear,
     focusInput,

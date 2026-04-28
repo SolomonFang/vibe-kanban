@@ -72,7 +72,11 @@ pub async fn terminal_ws(
     let mut working_dir = base_dir.clone();
     match WorkspaceRepo::find_repos_for_workspace(&deployment.db().pool, query.workspace_id).await {
         Ok(repos) if repos.len() == 1 => {
-            let repo_dir = base_dir.join(&repos[0].name);
+            let repo_dir = if repos[0].use_worktree {
+                base_dir.join(&repos[0].name)
+            } else {
+                repos[0].path.clone()
+            };
             if repo_dir.exists() {
                 working_dir = repo_dir;
             }

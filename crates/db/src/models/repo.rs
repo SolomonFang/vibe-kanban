@@ -27,6 +27,7 @@ pub struct Repo {
     pub archive_script: Option<String>,
     pub copy_files: Option<String>,
     pub parallel_setup_script: bool,
+    pub use_worktree: bool,
     pub dev_server_script: Option<String>,
     pub default_target_branch: Option<String>,
     pub default_working_dir: Option<String>,
@@ -92,6 +93,14 @@ pub struct UpdateRepo {
         skip_serializing_if = "Option::is_none",
         with = "double_option"
     )]
+    #[ts(optional, type = "boolean | null")]
+    pub use_worktree: Option<Option<bool>>,
+
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "double_option"
+    )]
     #[ts(optional, type = "string | null")]
     pub dev_server_script: Option<Option<String>>,
 
@@ -126,14 +135,15 @@ impl Repo {
                       cleanup_script,
                       archive_script,
                       copy_files,
-                      parallel_setup_script as "parallel_setup_script!: bool",
-                      dev_server_script,
+                       parallel_setup_script as "parallel_setup_script!: bool",
+                       use_worktree as "use_worktree!: bool",
+                       dev_server_script,
                       default_target_branch,
                       default_working_dir,
                       created_at as "created_at!: DateTime<Utc>",
                       updated_at as "updated_at!: DateTime<Utc>"
                FROM repos
-               WHERE name = '__NEEDS_BACKFILL__'"#
+                WHERE name = '__NEEDS_BACKFILL__'"#
         )
         .fetch_all(pool)
         .await
@@ -167,14 +177,15 @@ impl Repo {
                       cleanup_script,
                       archive_script,
                       copy_files,
-                      parallel_setup_script as "parallel_setup_script!: bool",
-                      dev_server_script,
+                       parallel_setup_script as "parallel_setup_script!: bool",
+                       use_worktree as "use_worktree!: bool",
+                       dev_server_script,
                       default_target_branch,
                       default_working_dir,
                       created_at as "created_at!: DateTime<Utc>",
                       updated_at as "updated_at!: DateTime<Utc>"
-               FROM repos
-               WHERE id = $1"#,
+                 FROM repos
+                 WHERE id = $1"#,
             id
         )
         .fetch_optional(pool)
@@ -225,8 +236,9 @@ impl Repo {
                          cleanup_script,
                          archive_script,
                          copy_files,
-                         parallel_setup_script as "parallel_setup_script!: bool",
-                         dev_server_script,
+                          parallel_setup_script as "parallel_setup_script!: bool",
+                          use_worktree as "use_worktree!: bool",
+                          dev_server_script,
                          default_target_branch,
                          default_working_dir,
                          created_at as "created_at!: DateTime<Utc>",
@@ -262,8 +274,9 @@ impl Repo {
                       cleanup_script,
                       archive_script,
                       copy_files,
-                      parallel_setup_script as "parallel_setup_script!: bool",
-                      dev_server_script,
+                       parallel_setup_script as "parallel_setup_script!: bool",
+                       use_worktree as "use_worktree!: bool",
+                       dev_server_script,
                       default_target_branch,
                       default_working_dir,
                       created_at as "created_at!: DateTime<Utc>",
@@ -288,8 +301,9 @@ impl Repo {
                       r.cleanup_script,
                       r.archive_script,
                       r.copy_files,
-                      r.parallel_setup_script as "parallel_setup_script!: bool",
-                      r.dev_server_script,
+                       r.parallel_setup_script as "parallel_setup_script!: bool",
+                       r.use_worktree as "use_worktree!: bool",
+                       r.dev_server_script,
                       r.default_target_branch,
                       r.default_working_dir,
                       r.created_at as "created_at!: DateTime<Utc>",
@@ -342,6 +356,10 @@ impl Repo {
             None => existing.parallel_setup_script,
             Some(v) => v.unwrap_or(false),
         };
+        let use_worktree = match &payload.use_worktree {
+            None => existing.use_worktree,
+            Some(v) => v.unwrap_or(true),
+        };
         let dev_server_script = match &payload.dev_server_script {
             None => existing.dev_server_script,
             Some(v) => v.clone(),
@@ -364,11 +382,12 @@ impl Repo {
                    archive_script = $4,
                    copy_files = $5,
                    parallel_setup_script = $6,
-                   dev_server_script = $7,
-                   default_target_branch = $8,
-                   default_working_dir = $9,
+                   use_worktree = $7,
+                   dev_server_script = $8,
+                   default_target_branch = $9,
+                   default_working_dir = $10,
                    updated_at = datetime('now', 'subsec')
-               WHERE id = $10
+               WHERE id = $11
                RETURNING id as "id!: Uuid",
                          path,
                          name,
@@ -378,6 +397,7 @@ impl Repo {
                          archive_script,
                          copy_files,
                          parallel_setup_script as "parallel_setup_script!: bool",
+                         use_worktree as "use_worktree!: bool",
                          dev_server_script,
                          default_target_branch,
                          default_working_dir,
@@ -389,6 +409,7 @@ impl Repo {
             archive_script,
             copy_files,
             parallel_setup_script,
+            use_worktree,
             dev_server_script,
             default_target_branch,
             default_working_dir,

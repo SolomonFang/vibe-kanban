@@ -459,7 +459,9 @@
           "label": "Setup Script",
           "helper": "This script runs from within the worktree after it's created and before the coding agent starts. Use it for setup tasks like installing dependencies or preparing the environment.",
           "parallelLabel": "Run setup script in parallel with coding agent",
-          "parallelHelper": "When enabled, the setup script runs simultaneously with the coding agent instead of waiting for setup to complete first."
+          "parallelHelper": "When enabled, the setup script runs simultaneously with the coding agent instead of waiting for setup to complete first.",
+          "useWorktreeLabel": "Use Git Worktree",
+          "useWorktreeHelper": "When enabled, new workspaces will use git worktrees in an isolated temp directory. When disabled, the coding agent works directly in the original repository."
         },
         "cleanup": {
           "label": "Cleanup Script",

@@ -175,28 +175,48 @@ pub async fn create_task_and_start(
         )
         .await;
 
-    let attempt_id = Uuid::new_v4();
-    let git_branch_name = deployment
-        .container()
-        .git_branch_from_workspace(&attempt_id, &task.title)
-        .await;
-
     // Compute agent_working_dir based on repo count:
-    // - Single repo: join repo name with default_working_dir (if set), or just repo name
+    // - Single worktree repo: join repo name with default_working_dir, or just repo name
+    // - Single non-worktree repo: use default_working_dir relative to the repo root
     // - Multiple repos: use None (agent runs in workspace root)
-    let agent_working_dir = if payload.repos.len() == 1 {
+    let single_repo = if payload.repos.len() == 1 {
         let repo = Repo::find_by_id(pool, payload.repos[0].repo_id)
             .await?
             .ok_or(RepoError::NotFound)?;
-        match repo.default_working_dir {
-            Some(subdir) => {
-                let path = PathBuf::from(&repo.name).join(&subdir);
-                Some(path.to_string_lossy().to_string())
-            }
-            None => Some(repo.name),
-        }
+        Some(repo)
     } else {
         None
+    };
+
+    let agent_working_dir = single_repo.as_ref().and_then(|repo| {
+        if repo.use_worktree {
+            match &repo.default_working_dir {
+                Some(subdir) => {
+                    let path = PathBuf::from(&repo.name).join(subdir);
+                    Some(path.to_string_lossy().to_string())
+                }
+                None => Some(repo.name.clone()),
+            }
+        } else {
+            repo.default_working_dir.clone()
+        }
+    });
+
+    let attempt_id = Uuid::new_v4();
+    let git_branch_name = if let Some(repo) = single_repo.as_ref().filter(|repo| !repo.use_worktree)
+    {
+        let branch = deployment.git().get_head_info(&repo.path)?.branch;
+        if branch == "HEAD" {
+            return Err(ApiError::BadRequest(
+                "Cannot start a non-worktree attempt from a detached HEAD".to_string(),
+            ));
+        }
+        branch
+    } else {
+        deployment
+            .container()
+            .git_branch_from_workspace(&attempt_id, &task.title)
+            .await
     };
 
     let workspace = Workspace::create(

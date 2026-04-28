@@ -41,6 +41,7 @@ pub struct RepoWithCopyFiles {
     pub path: PathBuf,
     pub name: String,
     pub copy_files: Option<String>,
+    pub use_worktree: bool,
 }
 
 impl WorkspaceRepo {
@@ -119,8 +120,9 @@ impl WorkspaceRepo {
                       r.cleanup_script,
                       r.archive_script,
                       r.copy_files,
-                      r.parallel_setup_script as "parallel_setup_script!: bool",
-                      r.dev_server_script,
+                       r.parallel_setup_script as "parallel_setup_script!: bool",
+                       r.use_worktree as "use_worktree!: bool",
+                       r.dev_server_script,
                       r.default_target_branch,
                       r.default_working_dir,
                       r.created_at as "created_at!: DateTime<Utc>",
@@ -148,8 +150,9 @@ impl WorkspaceRepo {
                       r.cleanup_script,
                       r.archive_script,
                       r.copy_files,
-                      r.parallel_setup_script as "parallel_setup_script!: bool",
-                      r.dev_server_script,
+                       r.parallel_setup_script as "parallel_setup_script!: bool",
+                       r.use_worktree as "use_worktree!: bool",
+                       r.dev_server_script,
                       r.default_target_branch,
                       r.default_working_dir,
                       r.created_at as "created_at!: DateTime<Utc>",
@@ -177,6 +180,7 @@ impl WorkspaceRepo {
                     archive_script: row.archive_script,
                     copy_files: row.copy_files,
                     parallel_setup_script: row.parallel_setup_script,
+                    use_worktree: row.use_worktree,
                     dev_server_script: row.dev_server_script,
                     default_target_branch: row.default_target_branch,
                     default_working_dir: row.default_working_dir,
@@ -265,8 +269,9 @@ impl WorkspaceRepo {
                       r.cleanup_script,
                       r.archive_script,
                       r.copy_files,
-                      r.parallel_setup_script as "parallel_setup_script!: bool",
-                      r.dev_server_script,
+                       r.parallel_setup_script as "parallel_setup_script!: bool",
+                       r.use_worktree as "use_worktree!: bool",
+                       r.dev_server_script,
                       r.default_target_branch,
                       r.default_working_dir,
                       r.created_at as "created_at!: DateTime<Utc>",
@@ -288,7 +293,8 @@ impl WorkspaceRepo {
         workspace_id: Uuid,
     ) -> Result<Vec<RepoWithCopyFiles>, sqlx::Error> {
         let rows = sqlx::query!(
-            r#"SELECT r.id as "id!: Uuid", r.path, r.name, r.copy_files
+            r#"SELECT r.id as "id!: Uuid", r.path, r.name, r.copy_files,
+                      r.use_worktree as "use_worktree!: bool"
                FROM repos r
                JOIN workspace_repos wr ON r.id = wr.repo_id
                WHERE wr.workspace_id = $1"#,
@@ -304,6 +310,7 @@ impl WorkspaceRepo {
                 path: PathBuf::from(row.path),
                 name: row.name,
                 copy_files: row.copy_files,
+                use_worktree: row.use_worktree,
             })
             .collect())
     }

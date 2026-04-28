@@ -105,6 +105,18 @@ pub struct WorkspaceStreamQuery {
     pub limit: Option<i64>,
 }
 
+fn repo_work_dir(workspace_dir: &Path, repo: &Repo) -> PathBuf {
+    if repo.use_worktree {
+        workspace_dir.join(&repo.name)
+    } else {
+        repo.path.clone()
+    }
+}
+
+fn repo_script_working_dir(repo: &Repo) -> Option<String> {
+    repo.use_worktree.then(|| repo.name.clone())
+}
+
 #[derive(Debug, Deserialize, TS)]
 pub struct UpdateWorkspace {
     pub archived: Option<bool>,
@@ -236,29 +248,49 @@ pub async fn create_task_attempt(
         .await?
         .ok_or(SqlxError::RowNotFound)?;
 
-    // Compute agent_working_dir based on repo count:
-    // - Single repo: join repo name with default_working_dir (if set), or just repo name
-    // - Multiple repos: use None (agent runs in workspace root)
-    let agent_working_dir = if payload.repos.len() == 1 {
+    let single_repo = if payload.repos.len() == 1 {
         let repo = Repo::find_by_id(pool, payload.repos[0].repo_id)
             .await?
             .ok_or(RepoError::NotFound)?;
-        match repo.default_working_dir {
-            Some(subdir) => {
-                let path = PathBuf::from(&repo.name).join(&subdir);
-                Some(path.to_string_lossy().to_string())
-            }
-            None => Some(repo.name),
-        }
+        Some(repo)
     } else {
         None
     };
 
+    // Compute agent_working_dir based on repo count:
+    // - Single worktree repo: join repo name with default_working_dir, or just repo name
+    // - Single non-worktree repo: use default_working_dir relative to the repo root
+    // - Multiple repos: use None (agent runs in workspace root)
+    let agent_working_dir = single_repo.as_ref().and_then(|repo| {
+        if repo.use_worktree {
+            match &repo.default_working_dir {
+                Some(subdir) => {
+                    let path = PathBuf::from(&repo.name).join(subdir);
+                    Some(path.to_string_lossy().to_string())
+                }
+                None => Some(repo.name.clone()),
+            }
+        } else {
+            repo.default_working_dir.clone()
+        }
+    });
+
     let attempt_id = Uuid::new_v4();
-    let git_branch_name = deployment
-        .container()
-        .git_branch_from_workspace(&attempt_id, &task.title)
-        .await;
+    let git_branch_name = if let Some(repo) = single_repo.as_ref().filter(|repo| !repo.use_worktree)
+    {
+        let branch = deployment.git().get_head_info(&repo.path)?.branch;
+        if branch == "HEAD" {
+            return Err(ApiError::BadRequest(
+                "Cannot start a non-worktree attempt from a detached HEAD".to_string(),
+            ));
+        }
+        branch
+    } else {
+        deployment
+            .container()
+            .git_branch_from_workspace(&attempt_id, &task.title)
+            .await
+    };
 
     let workspace = Workspace::create(
         pool,
@@ -512,7 +544,7 @@ pub async fn merge_task_attempt(
         .ensure_container_exists(&workspace)
         .await?;
     let workspace_path = Path::new(&container_ref);
-    let worktree_path = workspace_path.join(repo.name);
+    let worktree_path = repo_work_dir(workspace_path, &repo);
 
     let task = workspace
         .parent_task(pool)
@@ -588,7 +620,7 @@ pub async fn push_task_attempt_branch(
         .ensure_container_exists(&workspace)
         .await?;
     let workspace_path = Path::new(&container_ref);
-    let worktree_path = workspace_path.join(&repo.name);
+    let worktree_path = repo_work_dir(workspace_path, &repo);
 
     match deployment
         .git()
@@ -623,7 +655,7 @@ pub async fn force_push_task_attempt_branch(
         .ensure_container_exists(&workspace)
         .await?;
     let workspace_path = Path::new(&container_ref);
-    let worktree_path = workspace_path.join(&repo.name);
+    let worktree_path = repo_work_dir(workspace_path, &repo);
 
     deployment
         .git()
@@ -792,7 +824,7 @@ pub async fn get_task_attempt_branch_status(
 
         let repo_merges = merges_by_repo.get(&repo.id).cloned().unwrap_or_default();
 
-        let worktree_path = workspace_dir.join(&repo.name);
+        let worktree_path = repo_work_dir(&workspace_dir, &repo);
 
         let head_oid = deployment
             .git()
@@ -1029,7 +1061,7 @@ pub async fn rename_branch(
     let workspace_dir = PathBuf::from(&container_ref);
 
     for repo in &repos {
-        let worktree_path = workspace_dir.join(&repo.name);
+        let worktree_path = repo_work_dir(&workspace_dir, repo);
 
         if deployment
             .git()
@@ -1056,7 +1088,7 @@ pub async fn rename_branch(
     let mut renamed_repos: Vec<&Repo> = Vec::new();
 
     for repo in &repos {
-        let worktree_path = workspace_dir.join(&repo.name);
+        let worktree_path = repo_work_dir(&workspace_dir, repo);
 
         match deployment.git().rename_local_branch(
             &worktree_path,
@@ -1069,7 +1101,7 @@ pub async fn rename_branch(
             Err(e) => {
                 // Rollback already renamed repos
                 for renamed_repo in &renamed_repos {
-                    let rollback_path = workspace_dir.join(&renamed_repo.name);
+                    let rollback_path = repo_work_dir(&workspace_dir, renamed_repo);
                     if let Err(rollback_err) = deployment.git().rename_local_branch(
                         &rollback_path,
                         new_branch_name,
@@ -1177,7 +1209,7 @@ pub async fn rebase_task_attempt(
         .ensure_container_exists(&workspace)
         .await?;
     let workspace_path = Path::new(&container_ref);
-    let worktree_path = workspace_path.join(&repo.name);
+    let worktree_path = repo_work_dir(workspace_path, &repo);
 
     let result = deployment.git().rebase_branch(
         &repo.path,
@@ -1241,7 +1273,7 @@ pub async fn abort_conflicts_task_attempt(
         .ensure_container_exists(&workspace)
         .await?;
     let workspace_path = Path::new(&container_ref);
-    let worktree_path = workspace_path.join(&repo.name);
+    let worktree_path = repo_work_dir(workspace_path, &repo);
 
     deployment.git().abort_conflicts(&worktree_path)?;
 
@@ -1265,7 +1297,7 @@ pub async fn continue_rebase_task_attempt(
         .ensure_container_exists(&workspace)
         .await?;
     let workspace_path = Path::new(&container_ref);
-    let worktree_path = workspace_path.join(&repo.name);
+    let worktree_path = repo_work_dir(workspace_path, &repo);
 
     deployment.git().continue_rebase(&worktree_path)?;
 
@@ -1357,7 +1389,7 @@ pub async fn start_dev_server(
                 script: repo.dev_server_script.clone().unwrap(),
                 language: ScriptRequestLanguage::Bash,
                 context: ScriptContext::DevServer,
-                working_dir: Some(repo.name.clone()),
+                working_dir: repo_script_working_dir(repo),
             }),
             None,
         );
