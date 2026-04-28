@@ -33,6 +33,8 @@ pub enum WorkspaceError {
     NoRepositories,
     #[error("Partial workspace creation failed: {0}")]
     PartialCreation(String),
+    #[error("use_worktree=false is only supported for single-repository workspaces")]
+    NonWorktreeRequiresSingleRepo,
 }
 
 /// Info about a single repo's worktree within a workspace
@@ -64,6 +66,9 @@ impl WorkspaceManager {
         if repos.is_empty() {
             return Err(WorkspaceError::NoRepositories);
         }
+        if repos.iter().any(|input| !input.repo.use_worktree) && repos.len() != 1 {
+            return Err(WorkspaceError::NonWorktreeRequiresSingleRepo);
+        }
 
         info!(
             "Creating workspace at {} with {} repositories",
@@ -76,53 +81,66 @@ impl WorkspaceManager {
         let mut created_worktrees: Vec<RepoWorktree> = Vec::new();
 
         for input in repos {
-            let worktree_path = workspace_dir.join(&input.repo.name);
+            if input.repo.use_worktree {
+                let worktree_path = workspace_dir.join(&input.repo.name);
 
-            debug!(
-                "Creating worktree for repo '{}' at {}",
-                input.repo.name,
-                worktree_path.display()
-            );
+                debug!(
+                    "Creating worktree for repo '{}' at {}",
+                    input.repo.name,
+                    worktree_path.display()
+                );
 
-            match WorktreeManager::create_worktree(
-                &input.repo.path,
-                branch_name,
-                &worktree_path,
-                &input.target_branch,
-                true,
-            )
-            .await
-            {
-                Ok(()) => {
-                    created_worktrees.push(RepoWorktree {
-                        repo_id: input.repo.id,
-                        repo_name: input.repo.name.clone(),
-                        source_repo_path: input.repo.path.clone(),
-                        worktree_path,
-                    });
-                }
-                Err(e) => {
-                    error!(
-                        "Failed to create worktree for repo '{}': {}. Rolling back...",
-                        input.repo.name, e
-                    );
-
-                    // Rollback: cleanup all worktrees we've created so far
-                    Self::cleanup_created_worktrees(&created_worktrees).await;
-
-                    // Also remove the workspace directory if it's empty
-                    if let Err(cleanup_err) = tokio::fs::remove_dir(workspace_dir).await {
-                        debug!(
-                            "Could not remove workspace dir during rollback: {}",
-                            cleanup_err
-                        );
+                match WorktreeManager::create_worktree(
+                    &input.repo.path,
+                    branch_name,
+                    &worktree_path,
+                    &input.target_branch,
+                    true,
+                )
+                .await
+                {
+                    Ok(()) => {
+                        created_worktrees.push(RepoWorktree {
+                            repo_id: input.repo.id,
+                            repo_name: input.repo.name.clone(),
+                            source_repo_path: input.repo.path.clone(),
+                            worktree_path,
+                        });
                     }
+                    Err(e) => {
+                        error!(
+                            "Failed to create worktree for repo '{}': {}. Rolling back...",
+                            input.repo.name, e
+                        );
 
-                    return Err(WorkspaceError::PartialCreation(format!(
-                        "Failed to create worktree for repo '{}': {}",
-                        input.repo.name, e
-                    )));
+                        // Rollback: cleanup all worktrees we've created so far
+                        Self::cleanup_created_worktrees(&created_worktrees).await;
+
+                        // Also remove the workspace directory if it's empty
+                        if let Err(cleanup_err) = tokio::fs::remove_dir(workspace_dir).await {
+                            debug!(
+                                "Could not remove workspace dir during rollback: {}",
+                                cleanup_err
+                            );
+                        }
+
+                        return Err(WorkspaceError::PartialCreation(format!(
+                            "Failed to create worktree for repo '{}': {}",
+                            input.repo.name, e
+                        )));
+                    }
                 }
+            } else {
+                info!(
+                    "Skipping worktree creation for repo '{}' (use_worktree=false)",
+                    input.repo.name
+                );
+                created_worktrees.push(RepoWorktree {
+                    repo_id: input.repo.id,
+                    repo_name: input.repo.name.clone(),
+                    source_repo_path: input.repo.path.clone(),
+                    worktree_path: input.repo.path.clone(),
+                });
             }
         }
 
@@ -146,6 +164,9 @@ impl WorkspaceManager {
         if repos.is_empty() {
             return Err(WorkspaceError::NoRepositories);
         }
+        if repos.iter().any(|repo| !repo.use_worktree) && repos.len() != 1 {
+            return Err(WorkspaceError::NonWorktreeRequiresSingleRepo);
+        }
 
         // Try legacy migration first (single repo projects only)
         // Old layout had worktree directly at workspace_dir; new layout has it at workspace_dir/{repo_name}
@@ -158,6 +179,14 @@ impl WorkspaceManager {
         }
 
         for repo in repos {
+            if !repo.use_worktree {
+                info!(
+                    "Skipping worktree ensure for repo '{}' (use_worktree=false)",
+                    repo.name
+                );
+                continue;
+            }
+
             let worktree_path = workspace_dir.join(&repo.name);
 
             debug!(
@@ -182,6 +211,7 @@ impl WorkspaceManager {
 
         let cleanup_data: Vec<WorktreeCleanup> = repos
             .iter()
+            .filter(|repo| repo.use_worktree)
             .map(|repo| {
                 let worktree_path = workspace_dir.join(&repo.name);
                 WorktreeCleanup::new(worktree_path, Some(repo.path.clone()))
@@ -270,6 +300,10 @@ impl WorkspaceManager {
     /// Helper to cleanup worktrees during rollback
     async fn cleanup_created_worktrees(worktrees: &[RepoWorktree]) {
         for worktree in worktrees {
+            // Skip repos that don't use worktrees (they use their own path directly)
+            if worktree.worktree_path == worktree.source_repo_path {
+                continue;
+            }
             let cleanup = WorktreeCleanup::new(
                 worktree.worktree_path.clone(),
                 Some(worktree.source_repo_path.clone()),

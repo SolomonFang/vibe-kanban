@@ -459,7 +459,9 @@
           "label": "设置脚本",
           "helper": "此脚本从工作树内部运行，在创建后、编码代理启动前执行。用于设置任务，如安装依赖项或准备环境。",
           "parallelLabel": "与编码代理并行运行设置脚本",
-          "parallelHelper": "启用后，设置脚本将与编码代理同时运行，而不是等待设置完成后再启动。"
+          "parallelHelper": "启用后，设置脚本将与编码代理同时运行，而不是等待设置完成后再启动。",
+          "useWorktreeLabel": "使用 Git Worktree",
+          "useWorktreeHelper": "启用后，新工作空间将使用 git worktree 在隔离的临时目录中工作。禁用后，编码代理直接在原始仓库中操作。"
         },
         "cleanup": {
           "label": "清理脚本",

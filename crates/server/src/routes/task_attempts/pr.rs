@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use api_types::{PullRequestStatus, UpsertPullRequestRequest};
 use axum::{
@@ -38,6 +38,14 @@ use utils::response::ApiResponse;
 use uuid::Uuid;
 
 use crate::{DeploymentImpl, error::ApiError};
+
+fn repo_work_dir(workspace_dir: &Path, repo: &Repo) -> PathBuf {
+    if repo.use_worktree {
+        workspace_dir.join(&repo.name)
+    } else {
+        repo.path.clone()
+    }
+}
 
 #[derive(Debug, Deserialize, Serialize, TS)]
 pub struct CreatePrApiRequest {
@@ -211,7 +219,7 @@ pub async fn create_pr(
         .ensure_container_exists(&workspace)
         .await?;
     let workspace_path = PathBuf::from(&container_ref);
-    let worktree_path = workspace_path.join(&repo.name);
+    let worktree_path = repo_work_dir(&workspace_path, &repo);
 
     let git = deployment.git();
     let push_remote = git.resolve_remote_for_branch(&repo_path, &workspace.branch)?;

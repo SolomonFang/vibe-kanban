@@ -33,6 +33,7 @@ interface RepoScriptsFormState {
   display_name: string;
   setup_script: string;
   parallel_setup_script: boolean;
+  use_worktree: boolean;
   cleanup_script: string;
   copy_files: string;
   dev_server_script: string;
@@ -43,6 +44,7 @@ function repoToFormState(repo: Repo): RepoScriptsFormState {
     display_name: repo.display_name,
     setup_script: repo.setup_script ?? '',
     parallel_setup_script: repo.parallel_setup_script,
+    use_worktree: repo.use_worktree,
     cleanup_script: repo.cleanup_script ?? '',
     copy_files: repo.copy_files ?? '',
     dev_server_script: repo.dev_server_script ?? '',
@@ -181,6 +183,7 @@ export function ReposSettings() {
         cleanup_script: draft.cleanup_script.trim() || null,
         copy_files: draft.copy_files.trim() || null,
         parallel_setup_script: draft.parallel_setup_script,
+        use_worktree: draft.use_worktree,
         dev_server_script: draft.dev_server_script.trim() || null,
       };
 
@@ -395,6 +398,27 @@ export function ReposSettings() {
                 </div>
                 <p className="text-sm text-muted-foreground pl-6">
                   {t('settings.repos.scripts.setup.parallelHelper')}
+                </p>
+
+                <div className="flex items-center space-x-2 pt-2">
+                  <Checkbox
+                    id="use-worktree"
+                    checked={draft.use_worktree}
+                    onCheckedChange={(checked) =>
+                      updateDraft({
+                        use_worktree: checked === true,
+                      })
+                    }
+                  />
+                  <Label
+                    htmlFor="use-worktree"
+                    className="text-sm font-normal cursor-pointer"
+                  >
+                    {t('settings.repos.scripts.setup.useWorktreeLabel')}
+                  </Label>
+                </div>
+                <p className="text-sm text-muted-foreground pl-6">
+                  {t('settings.repos.scripts.setup.useWorktreeHelper')}
                 </p>
               </div>
 

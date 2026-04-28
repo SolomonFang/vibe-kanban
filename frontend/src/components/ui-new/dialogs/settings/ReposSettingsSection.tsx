@@ -30,6 +30,7 @@ interface RepoScriptsFormState {
   default_target_branch: string;
   setup_script: string;
   parallel_setup_script: boolean;
+  use_worktree: boolean;
   cleanup_script: string;
   archive_script: string;
   copy_files: string;
@@ -43,6 +44,7 @@ function repoToFormState(repo: Repo): RepoScriptsFormState {
     default_target_branch: repo.default_target_branch ?? '',
     setup_script: repo.setup_script ?? '',
     parallel_setup_script: repo.parallel_setup_script,
+    use_worktree: repo.use_worktree,
     cleanup_script: repo.cleanup_script ?? '',
     archive_script: repo.archive_script ?? '',
     copy_files: repo.copy_files ?? '',
@@ -169,6 +171,7 @@ export function ReposSettingsSection({
         archive_script: draft.archive_script.trim() || null,
         copy_files: draft.copy_files.trim() || null,
         parallel_setup_script: draft.parallel_setup_script,
+        use_worktree: draft.use_worktree,
         dev_server_script: draft.dev_server_script.trim() || null,
       };
 
@@ -413,6 +416,16 @@ export function ReposSettingsSection({
                 updateDraft({ parallel_setup_script: checked })
               }
               disabled={!draft.setup_script.trim()}
+            />
+
+            <SettingsCheckbox
+              id="use-worktree"
+              label={t('settings.repos.scripts.setup.useWorktreeLabel')}
+              description={t('settings.repos.scripts.setup.useWorktreeHelper')}
+              checked={draft.use_worktree}
+              onChange={(checked) =>
+                updateDraft({ use_worktree: checked })
+              }
             />
 
             <SettingsField

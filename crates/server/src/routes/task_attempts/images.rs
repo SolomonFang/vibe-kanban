@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use axum::{
     Extension, Router,
@@ -9,7 +9,7 @@ use axum::{
     response::{Json as ResponseJson, Response},
     routing::{get, post},
 };
-use db::models::{task::Task, workspace::Workspace};
+use db::models::{task::Task, workspace::Workspace, workspace_repo::WorkspaceRepo};
 use deployment::Deployment;
 use serde::Deserialize;
 use services::services::{container::ContainerService, image::ImageError};
@@ -31,6 +31,29 @@ pub struct ImageMetadataQuery {
     pub path: String,
 }
 
+async fn workspace_image_base_path(
+    deployment: &DeploymentImpl,
+    workspace: &Workspace,
+) -> Result<PathBuf, ApiError> {
+    let container_ref = deployment
+        .container()
+        .ensure_container_exists(workspace)
+        .await?;
+    let repositories =
+        WorkspaceRepo::find_repos_for_workspace(&deployment.db().pool, workspace.id).await?;
+    let workspace_path = PathBuf::from(container_ref);
+    let base_path = if repositories.len() == 1 && !repositories[0].use_worktree {
+        repositories[0].path.clone()
+    } else {
+        workspace_path
+    };
+
+    Ok(match workspace.agent_working_dir.as_deref() {
+        Some(dir) if !dir.is_empty() => base_path.join(dir),
+        _ => base_path,
+    })
+}
+
 /// Upload an image and immediately copy it to the workspace's worktree.
 /// This allows images to be available in the container before follow-up is sent.
 pub async fn upload_image(
@@ -46,15 +69,7 @@ pub async fn upload_image(
     // Process upload (store in cache, associate with task)
     let image_response = process_image_upload(&deployment, multipart, Some(task.id)).await?;
 
-    let container_ref = deployment
-        .container()
-        .ensure_container_exists(&workspace)
-        .await?;
-    let workspace_path = std::path::PathBuf::from(container_ref);
-    let base_path = match workspace.agent_working_dir.as_deref() {
-        Some(dir) if !dir.is_empty() => workspace_path.join(dir),
-        _ => workspace_path,
-    };
+    let base_path = workspace_image_base_path(&deployment, &workspace).await?;
     deployment
         .image()
         .copy_images_by_ids_to_worktree(&base_path, &[image_response.id])
@@ -94,15 +109,7 @@ pub async fn get_image_metadata(
         })));
     }
 
-    let container_ref = deployment
-        .container()
-        .ensure_container_exists(&workspace)
-        .await?;
-    let workspace_path = std::path::PathBuf::from(container_ref);
-    let base_path = match workspace.agent_working_dir.as_deref() {
-        Some(dir) if !dir.is_empty() => workspace_path.join(dir),
-        _ => workspace_path,
-    };
+    let base_path = workspace_image_base_path(&deployment, &workspace).await?;
     let full_path = base_path.join(&query.path);
 
     // Check if file exists
@@ -157,15 +164,7 @@ pub async fn serve_image(
     if path.contains("..") {
         return Err(ApiError::Image(ImageError::NotFound));
     }
-    let container_ref = deployment
-        .container()
-        .ensure_container_exists(&workspace)
-        .await?;
-    let workspace_path = std::path::PathBuf::from(container_ref);
-    let base_path = match workspace.agent_working_dir.as_deref() {
-        Some(dir) if !dir.is_empty() => workspace_path.join(dir),
-        _ => workspace_path,
-    };
+    let base_path = workspace_image_base_path(&deployment, &workspace).await?;
     let vibe_images_dir = base_path.join(utils::path::VIBE_IMAGES_DIR);
     let full_path = vibe_images_dir.join(&path);
 

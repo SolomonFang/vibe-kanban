@@ -77,7 +77,11 @@ pub async fn start_review(
 
         let mut contexts = Vec::new();
         for repo in repos {
-            let worktree_path = workspace_path.join(&repo.repo.name);
+            let worktree_path = if repo.repo.use_worktree {
+                workspace_path.join(&repo.repo.name)
+            } else {
+                repo.repo.path.clone()
+            };
             if let Ok(base_commit) = deployment.git().get_fork_point(
                 &worktree_path,
                 &repo.target_branch,
