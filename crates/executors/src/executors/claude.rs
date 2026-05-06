@@ -8,7 +8,7 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     process::Stdio,
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 
 use async_trait::async_trait;
@@ -49,12 +49,31 @@ use crate::{
     stdout_dup::create_stdout_pipe_writer,
 };
 
-fn base_command(claude_code_router: bool) -> &'static str {
+fn base_command(claude_code_router: bool, native_binary: bool) -> &'static str {
     if claude_code_router {
-        "npx -y @musistudio/claude-code-router@1.0.66 code"
+        "npx -y @musistudio/claude-code-router@1.0.73 code"
+    } else if native_binary {
+        "claude"
     } else {
         "npx -y @anthropic-ai/claude-code@2.1.32"
     }
+}
+
+/// Auto-detect whether the native `claude` binary is available in PATH.
+/// Uses a OnceLock for caching so PATH lookup only happens once per process lifetime.
+fn detect_claude_binary() -> bool {
+    static DETECTED: OnceLock<bool> = OnceLock::new();
+    *DETECTED.get_or_init(|| {
+        if let Ok(path) = std::env::var("VIBE_KANBAN_DISABLE_NATIVE_CLAUDE_DETECTION") {
+            if path == "1" || path.to_lowercase() == "true" {
+                tracing::info!("Native Claude binary detection disabled via VIBE_KANBAN_DISABLE_NATIVE_CLAUDE_DETECTION");
+                return false;
+            }
+        }
+        let found = which::which("claude").is_ok();
+        tracing::info!("Native Claude binary detection: {}", if found { "found" } else { "not found" });
+        found
+    })
 }
 
 use derivative::Derivative;
@@ -66,6 +85,8 @@ pub struct ClaudeCode {
     pub append_prompt: AppendPrompt,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claude_code_router: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub use_native_binary: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -94,8 +115,12 @@ impl ClaudeCode {
             );
         }
 
+        let native = self
+            .use_native_binary
+            .unwrap_or_else(detect_claude_binary);
+
         let mut builder =
-            CommandBuilder::new(base_command(self.claude_code_router.unwrap_or(false)))
+            CommandBuilder::new(base_command(self.claude_code_router.unwrap_or(false), native))
                 .params(["-p"]);
 
         let plan = self.plan.unwrap_or(false);
@@ -2366,6 +2391,7 @@ mod tests {
 
         let executor = ClaudeCode {
             claude_code_router: Some(false),
+            use_native_binary: Some(false),
             plan: None,
             approvals: None,
             model: None,

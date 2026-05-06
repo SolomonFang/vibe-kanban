@@ -17,6 +17,12 @@
         "null"
       ]
     },
+    "use_native_binary": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
     "plan": {
       "type": [
         "boolean",

@@ -13,7 +13,7 @@ use tokio::{
 };
 use walkdir::WalkDir;
 
-use super::{ClaudeCode, ClaudeJson, ClaudePlugin, base_command};
+use super::{ClaudeCode, ClaudeJson, ClaudePlugin, base_command, detect_claude_binary};
 use crate::{
     command::{CommandBuildError, CommandBuilder, apply_overrides},
     env::{ExecutionEnv, RepoContext},
@@ -179,8 +179,11 @@ impl ClaudeCode {
     async fn build_slash_commands_discovery_command_builder(
         &self,
     ) -> Result<CommandBuilder, CommandBuildError> {
+        let native = self
+            .use_native_binary
+            .unwrap_or_else(detect_claude_binary);
         let mut builder =
-            CommandBuilder::new(base_command(self.claude_code_router.unwrap_or(false)))
+            CommandBuilder::new(base_command(self.claude_code_router.unwrap_or(false), native))
                 .params(["-p"]);
 
         builder = builder.extend_params([

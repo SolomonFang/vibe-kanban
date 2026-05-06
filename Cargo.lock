@@ -2328,6 +2328,7 @@ dependencies = [
  "utils",
  "uuid",
  "walkdir",
+ "which",
  "winsplit",
  "xdg",
 ]
