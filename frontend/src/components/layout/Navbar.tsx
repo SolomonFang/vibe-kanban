@@ -38,9 +38,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
-import { OAuthDialog } from '@/components/dialogs/global/OAuthDialog';
 import { useUserSystem } from '@/components/ConfigProvider';
-import { oauthApi } from '@/lib/api';
 import { ITERATIONS } from '@/constants/iterations';
 
 const INTERNAL_NAV = [
@@ -71,7 +69,7 @@ export function Navbar() {
   const { projectId, project } = useProject();
   const { query, setQuery, iteration, setIteration, active, clear, registerInputRef } = useSearch();
   const handleOpenInEditor = useOpenProjectInEditor(project || null);
-  const { loginStatus, reloadSystem } = useUserSystem();
+  const { loginStatus } = useUserSystem();
 
   const { data: repos } = useProjectRepos(projectId);
   const isSingleRepoProject = repos?.length === 1;

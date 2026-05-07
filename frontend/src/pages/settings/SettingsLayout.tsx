@@ -6,7 +6,6 @@ import {
   Server,
   X,
   FolderOpen,
-  Building2,
   GitBranch,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
