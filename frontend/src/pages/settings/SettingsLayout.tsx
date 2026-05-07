@@ -31,10 +31,6 @@ const settingsNavigation = [
     icon: GitBranch,
   },
   {
-    path: 'organizations',
-    icon: Building2,
-  },
-  {
     path: 'agents',
     icon: Cpu,
   },

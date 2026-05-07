@@ -19,12 +19,8 @@ import {
   FolderOpen,
   Settings,
   BookOpen,
-  MessageCircleQuestion,
-  MessageCircle,
   Menu,
   Plus,
-  LogOut,
-  LogIn,
 } from 'lucide-react';
 import { Logo } from '@/components/Logo';
 import { SearchBar } from '@/components/SearchBar';
@@ -56,17 +52,7 @@ const EXTERNAL_LINKS = [
     label: 'Docs',
     icon: BookOpen,
     href: 'https://vibekanban.com/docs',
-  },
-  {
-    label: 'Support',
-    icon: MessageCircleQuestion,
-    href: 'https://github.com/BloopAI/vibe-kanban/issues',
-  },
-  {
-    label: 'Discord',
-    icon: MessageCircle,
-    href: 'https://discord.gg/AC4nwVtJM3',
-  },
+  }
 ];
 
 function NavDivider() {
@@ -126,22 +112,6 @@ export function Navbar() {
 
   const handleOpenInIDE = () => {
     handleOpenInEditor();
-  };
-
-  const handleOpenOAuth = async () => {
-    const profile = await OAuthDialog.show();
-    if (profile) {
-      await reloadSystem();
-    }
-  };
-
-  const handleOAuthLogout = async () => {
-    try {
-      await oauthApi.logout();
-      await reloadSystem();
-    } catch (err) {
-      console.error('Error logging out:', err);
-    }
   };
 
   const isOAuthLoggedIn = loginStatus?.status === 'loggedin';
@@ -312,18 +282,6 @@ export function Navbar() {
                   })}
 
                   <DropdownMenuSeparator />
-
-                  {isOAuthLoggedIn ? (
-                    <DropdownMenuItem onSelect={handleOAuthLogout}>
-                      <LogOut className="mr-2 h-4 w-4" />
-                      {t('common:signOut')}
-                    </DropdownMenuItem>
-                  ) : (
-                    <DropdownMenuItem onSelect={handleOpenOAuth}>
-                      <LogIn className="mr-2 h-4 w-4" />
-                      {t('common:signIn')}
-                    </DropdownMenuItem>
-                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
