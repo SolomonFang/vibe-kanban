@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
-use workspace_utils::approvals::ApprovalStatus;
+use workspace_utils::approvals::{ApprovalStatus, QuestionStatus};
 
 use super::types::PermissionMode;
 use crate::{
@@ -21,6 +21,7 @@ use crate::{
 };
 
 const EXIT_PLAN_MODE_NAME: &str = "ExitPlanMode";
+const ASK_USER_QUESTION_NAME: &str = "AskUserQuestion";
 pub const AUTO_APPROVE_CALLBACK_ID: &str = "AUTO_APPROVE_CALLBACK_ID";
 pub const STOP_GIT_CHECK_CALLBACK_ID: &str = "STOP_GIT_CHECK_CALLBACK_ID";
 // Prefix for denial messages from the user, mirrors claude code CLI behavior
@@ -128,6 +129,96 @@ impl ClaudeAgentClient {
                 message: "Approval still pending (unexpected)".to_string(),
                 interrupt: Some(false),
             }),
+            ApprovalStatus::Answered { .. } => {
+                // Tool approvals should not receive Answered status; questions use a separate flow
+                tracing::warn!("Received Answered status in handle_approval, treating as approved");
+                Ok(PermissionResult::Allow {
+                    updated_input: tool_input,
+                    updated_permissions: None,
+                })
+            }
+        }
+    }
+
+    async fn handle_question(
+        &self,
+        tool_use_id: String,
+        tool_name: String,
+        tool_input: serde_json::Value,
+    ) -> Result<PermissionResult, ExecutorError> {
+        let approval_service = self
+            .approvals
+            .as_ref()
+            .ok_or(ExecutorApprovalError::ServiceUnavailable)?;
+
+        let question_count = tool_input
+            .get("questions")
+            .and_then(|q| q.as_array())
+            .map(|a| a.len())
+            .unwrap_or(1);
+
+        let status = match approval_service
+            .request_question_answer(
+                &tool_name,
+                tool_input.clone(),
+                &tool_use_id,
+                question_count,
+                self.cancel.clone(),
+            )
+            .await
+        {
+            Ok(s) => s,
+            Err(err) => {
+                if !matches!(err, ExecutorApprovalError::Cancelled) {
+                    tracing::error!("Claude question failed {err}");
+                }
+                let _ = self
+                    .log_writer
+                    .log_raw(&serde_json::to_string(&ClaudeJson::QuestionResponse {
+                        call_id: tool_use_id.clone(),
+                        tool_name: tool_name.clone(),
+                        question_status: QuestionStatus::TimedOut,
+                    })?)
+                    .await;
+                return Err(err.into());
+            }
+        };
+
+        self.log_writer
+            .log_raw(&serde_json::to_string(&ClaudeJson::QuestionResponse {
+                call_id: tool_use_id.clone(),
+                tool_name: tool_name.clone(),
+                question_status: status.clone(),
+            })?)
+            .await?;
+
+        match status {
+            QuestionStatus::Answered { answers } => {
+                let answers_map: serde_json::Map<String, serde_json::Value> = answers
+                    .iter()
+                    .map(|qa| {
+                        (
+                            qa.question.clone(),
+                            serde_json::Value::String(qa.answer.join(", ")),
+                        )
+                    })
+                    .collect();
+                let mut updated = tool_input.clone();
+                if let Some(obj) = updated.as_object_mut() {
+                    obj.insert(
+                        "answers".to_string(),
+                        serde_json::Value::Object(answers_map),
+                    );
+                }
+                Ok(PermissionResult::Allow {
+                    updated_input: updated,
+                    updated_permissions: None,
+                })
+            }
+            QuestionStatus::TimedOut => Ok(PermissionResult::Deny {
+                message: "Question request timed out".to_string(),
+                interrupt: Some(true),
+            }),
         }
     }
 
@@ -138,6 +229,23 @@ impl ClaudeAgentClient {
         _permission_suggestions: Option<Vec<PermissionUpdate>>,
         tool_use_id: Option<String>,
     ) -> Result<PermissionResult, ExecutorError> {
+        // AskUserQuestion always needs user interaction
+        if tool_name == ASK_USER_QUESTION_NAME {
+            if let Some(latest_tool_use_id) = tool_use_id {
+                return self
+                    .handle_question(latest_tool_use_id, tool_name, input)
+                    .await;
+            } else {
+                tracing::warn!("AskUserQuestion without tool_use_id, cannot route to approval");
+                return Ok(PermissionResult::Deny {
+                    message:
+                        "AskUserQuestion requires user interaction but no tool_use_id was provided"
+                            .to_string(),
+                    interrupt: Some(false),
+                });
+            }
+        }
+
         if self.auto_approve {
             Ok(PermissionResult::Allow {
                 updated_input: input,

@@ -20,7 +20,10 @@ use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 use ts_rs::TS;
 use workspace_utils::{
-    approvals::ApprovalStatus, diff::create_unified_diff, log_msg::LogMsg, msg_store::MsgStore,
+    approvals::{ApprovalStatus, QuestionStatus},
+    diff::create_unified_diff,
+    log_msg::LogMsg,
+    msg_store::MsgStore,
     path::make_path_relative,
 };
 
@@ -38,8 +41,8 @@ use crate::{
         codex::client::LogWriter, utils::reorder_slash_commands,
     },
     logs::{
-        ActionType, FileChange, NormalizedEntry, NormalizedEntryError, NormalizedEntryType,
-        TodoItem, ToolStatus,
+        ActionType, AskUserQuestionItem, AskUserQuestionOption, AnsweredQuestion, FileChange,
+        NormalizedEntry, NormalizedEntryError, NormalizedEntryType, TodoItem, ToolStatus,
         stderr_processor::normalize_stderr_logs,
         utils::{
             EntryIndexProvider,
@@ -77,6 +80,18 @@ fn detect_claude_binary() -> bool {
 }
 
 use derivative::Derivative;
+use strum_macros::{AsRefStr, EnumString};
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, JsonSchema, AsRefStr, EnumString)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum ClaudeEffort {
+    Low,
+    Medium,
+    High,
+    XHigh,
+    Max,
+}
 
 #[derive(Derivative, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[derivative(Debug, PartialEq)]
@@ -93,6 +108,10 @@ pub struct ClaudeCode {
     pub approvals: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<ClaudeEffort>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dangerously_skip_permissions: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -135,6 +154,8 @@ impl ClaudeCode {
                 "--permission-mode={}",
                 PermissionMode::BypassPermissions
             )]);
+        } else {
+            builder = builder.extend_params(["--disallowedTools=AskUserQuestion"]);
         }
         if self.dangerously_skip_permissions.unwrap_or(false) {
             builder = builder.extend_params(["--dangerously-skip-permissions"]);
@@ -142,13 +163,18 @@ impl ClaudeCode {
         if let Some(model) = &self.model {
             builder = builder.extend_params(["--model", model]);
         }
+        if let Some(effort) = &self.effort {
+            builder = builder.extend_params(["--effort", effort.as_ref()]);
+        }
+        if let Some(agent) = &self.agent {
+            builder = builder.extend_params(["--agent", agent]);
+        }
         builder = builder.extend_params([
             "--verbose",
             "--output-format=stream-json",
             "--input-format=stream-json",
             "--include-partial-messages",
             "--replay-user-messages",
-            "--disallowedTools=AskUserQuestion",
         ]);
 
         apply_overrides(builder, &self.cmd)
@@ -182,11 +208,11 @@ impl ClaudeCode {
                 "PreToolUse".to_string(),
                 serde_json::json!([
                     {
-                        "matcher": "^ExitPlanMode$",
+                        "matcher": "^(ExitPlanMode|AskUserQuestion)$",
                         "hookCallbackIds": ["tool_approval"],
                     },
                     {
-                        "matcher": "^(?!ExitPlanMode$).*",
+                        "matcher": "^(?!(ExitPlanMode|AskUserQuestion)$).*",
                         "hookCallbackIds": [AUTO_APPROVE_CALLBACK_ID],
                     }
                 ]),
@@ -201,9 +227,23 @@ impl ClaudeCode {
                     }
                 ]),
             );
+        } else {
+            hooks.insert(
+                "PreToolUse".to_string(),
+                serde_json::json!([
+                    {
+                        "matcher": "^AskUserQuestion$",
+                        "hookCallbackIds": ["tool_approval"],
+                    }
+                ]),
+            );
         }
 
         Some(serde_json::Value::Object(hooks))
+    }
+
+    fn compute_cmd_key(&self) -> String {
+        serde_json::to_string(&self.cmd).unwrap_or_default()
     }
 }
 
@@ -597,6 +637,7 @@ impl ClaudeLogProcessor {
             ClaudeJson::Result { session_id, .. } => session_id.clone(),
             ClaudeJson::StreamEvent { .. } => None, // session might not have been initialized yet
             ClaudeJson::ApprovalResponse { .. } => None,
+            ClaudeJson::QuestionResponse { .. } => None,
             ClaudeJson::ControlRequest { .. } => None,
             ClaudeJson::ControlResponse { .. } => None,
             ClaudeJson::ControlCancelRequest { .. } => None,
@@ -806,6 +847,24 @@ impl ClaudeLogProcessor {
                     result: None,
                 }
             }
+            ClaudeToolData::AskUserQuestion { questions } => ActionType::AskUserQuestion {
+                questions: questions
+                    .iter()
+                    .map(|q| AskUserQuestionItem {
+                        question: q.question.clone(),
+                        header: q.header.clone(),
+                        multi_select: q.multi_select,
+                        options: q
+                            .options
+                            .iter()
+                            .map(|o| AskUserQuestionOption {
+                                label: o.label.clone(),
+                                description: o.description.clone(),
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            },
             ClaudeToolData::ExitPlanMode { plan } => {
                 ActionType::PlanPresentation { plan: plan.clone() }
             }
@@ -1449,6 +1508,7 @@ impl ClaudeLogProcessor {
                         content: format!("Approval timed out for tool {tool_name}"),
                         metadata: None,
                     }),
+                    ApprovalStatus::Answered { .. } => None,
                 };
 
                 if let Some(entry) = entry_opt {
@@ -1456,6 +1516,51 @@ impl ClaudeLogProcessor {
                     patches.push(ConversationPatch::add_normalized_entry(idx, entry));
                 }
             }
+            ClaudeJson::QuestionResponse {
+                call_id: _,
+                tool_name: _,
+                question_status,
+            } => match question_status {
+                QuestionStatus::Answered { answers } => {
+                    let qa_pairs: Vec<AnsweredQuestion> = answers
+                        .iter()
+                        .map(|qa| AnsweredQuestion {
+                            question: qa.question.clone(),
+                            answer: qa.answer.clone(),
+                        })
+                        .collect();
+                    let idx = entry_index_provider.next();
+                    patches.push(ConversationPatch::add_normalized_entry(
+                        idx,
+                        NormalizedEntry {
+                            timestamp: None,
+                            entry_type: NormalizedEntryType::UserAnsweredQuestions {
+                                answers: qa_pairs,
+                            },
+                            content: format!(
+                                "Answered {} question{}",
+                                answers.len(),
+                                if answers.len() != 1 { "s" } else { "" }
+                            ),
+                            metadata: None,
+                        },
+                    ));
+                }
+                QuestionStatus::TimedOut => {
+                    let idx = entry_index_provider.next();
+                    patches.push(ConversationPatch::add_normalized_entry(
+                        idx,
+                        NormalizedEntry {
+                            timestamp: None,
+                            entry_type: NormalizedEntryType::ErrorMessage {
+                                error_type: NormalizedEntryError::Other,
+                            },
+                            content: "Question request timed out".to_string(),
+                            metadata: None,
+                        },
+                    ));
+                }
+            },
             ClaudeJson::Unknown { data } => {
                 let entry = NormalizedEntry {
                     timestamp: None,
@@ -1512,6 +1617,7 @@ impl ClaudeLogProcessor {
             },
             ActionType::PlanPresentation { plan } => plan.clone(),
             ActionType::TodoManagement { .. } => "TODO list updated".to_string(),
+            ActionType::AskUserQuestion { .. } => "Ask user question".to_string(),
             ActionType::Other { description: _ } => match tool_data {
                 ClaudeToolData::LS { path } => {
                     let relative_path = make_path_relative(path, worktree_path);
@@ -1841,6 +1947,11 @@ pub enum ClaudeJson {
         tool_name: String,
         approval_status: ApprovalStatus,
     },
+    QuestionResponse {
+        call_id: String,
+        tool_name: String,
+        question_status: QuestionStatus,
+    },
     ControlRequest {
         request_id: String,
         request: ControlRequestType,
@@ -2038,6 +2149,10 @@ pub enum ClaudeToolData {
         #[serde(default)]
         path: Option<String>,
     },
+    #[serde(rename = "AskUserQuestion", alias = "ask_user_question")]
+    AskUserQuestion {
+        questions: Vec<ClaudeAskUserQuestionInput>,
+    },
     ExitPlanMode {
         plan: String,
     },
@@ -2172,11 +2287,30 @@ pub struct ClaudeEditItem {
     pub new_string: Option<String>,
 }
 
+/// A single question from AskUserQuestion tool input.
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
+pub struct ClaudeAskUserQuestionInput {
+    pub question: String,
+    #[serde(default)]
+    pub header: String,
+    pub options: Vec<ClaudeAskUserQuestionInputOption>,
+    #[serde(rename = "multiSelect", default)]
+    pub multi_select: bool,
+}
+
+/// An option for an AskUserQuestion question.
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
+pub struct ClaudeAskUserQuestionInputOption {
+    pub label: String,
+    pub description: String,
+}
+
 impl ClaudeToolData {
     pub fn get_name(&self) -> &str {
         match self {
             ClaudeToolData::TodoWrite { .. } => "TodoWrite",
             ClaudeToolData::Task { .. } => "Task",
+            ClaudeToolData::AskUserQuestion { .. } => "AskUserQuestion",
             ClaudeToolData::Glob { .. } => "Glob",
             ClaudeToolData::LS { .. } => "LS",
             ClaudeToolData::Read { .. } => "Read",
@@ -2395,6 +2529,8 @@ mod tests {
             plan: None,
             approvals: None,
             model: None,
+            effort: None,
+            agent: None,
             append_prompt: AppendPrompt::default(),
             dangerously_skip_permissions: None,
             cmd: crate::command::CmdOverrides {

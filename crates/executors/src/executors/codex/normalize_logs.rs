@@ -1262,6 +1262,7 @@ impl ToNormalizedEntryOpt for Approval {
                 content: format!("Approval timed out for tool {tool_name}"),
                 metadata: None,
             }),
+            ApprovalStatus::Answered { .. } => None,
         }
     }
 }

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
-use workspace_utils::approvals::ApprovalStatus;
+use workspace_utils::approvals::{ApprovalStatus, QuestionStatus};
 
 /// Errors emitted by executor approval services.
 #[derive(Debug, Error)]
@@ -40,6 +40,20 @@ pub trait ExecutorApprovalService: Send + Sync {
         tool_call_id: &str,
         cancel: CancellationToken,
     ) -> Result<ApprovalStatus, ExecutorApprovalError>;
+
+    /// Requests the user to answer a set of questions from an AskUserQuestion tool call.
+    /// The `question_count` indicates how many questions are being asked.
+    ///
+    /// The `cancel` token allows the caller to cancel the question request early.
+    /// When cancelled, implementations should return `ExecutorApprovalError::Cancelled`.
+    async fn request_question_answer(
+        &self,
+        tool_name: &str,
+        tool_input: Value,
+        tool_call_id: &str,
+        question_count: usize,
+        cancel: CancellationToken,
+    ) -> Result<QuestionStatus, ExecutorApprovalError>;
 }
 
 #[derive(Debug, Default)]
@@ -55,6 +69,19 @@ impl ExecutorApprovalService for NoopExecutorApprovalService {
         _cancel: CancellationToken,
     ) -> Result<ApprovalStatus, ExecutorApprovalError> {
         Ok(ApprovalStatus::Approved)
+    }
+
+    async fn request_question_answer(
+        &self,
+        _tool_name: &str,
+        _tool_input: Value,
+        _tool_call_id: &str,
+        _question_count: usize,
+        _cancel: CancellationToken,
+    ) -> Result<QuestionStatus, ExecutorApprovalError> {
+        Ok(QuestionStatus::Answered {
+            answers: vec![],
+        })
     }
 }
 

@@ -41,6 +41,26 @@
         "null"
       ]
     },
+    "effort": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        null
+      ]
+    },
+    "agent": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "dangerously_skip_permissions": {
       "type": [
         "boolean",

@@ -1380,6 +1380,13 @@ async fn process_event_stream(
                                     .to_string(),
                             ),
                         ),
+                        ApprovalStatus::Answered { .. } => (
+                            "reject",
+                            Some(
+                                "Approval request was answered; proceed without using this tool call."
+                                    .to_string(),
+                            ),
+                        ),
                     };
 
                     // If we reject without a message, OpenCode treats it as a hard stop.

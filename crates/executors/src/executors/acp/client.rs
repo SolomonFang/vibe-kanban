@@ -172,6 +172,10 @@ impl acp::Client for AcpClient {
                 warn!("Approval resolved to Pending");
                 acp::RequestPermissionOutcome::Cancelled
             }
+            ApprovalStatus::Answered { .. } => {
+                warn!("Approval was answered");
+                acp::RequestPermissionOutcome::Cancelled
+            }
         };
 
         self.send_event(AcpEvent::ApprovalResponse(ApprovalResponse {

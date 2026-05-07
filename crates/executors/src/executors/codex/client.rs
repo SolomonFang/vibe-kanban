@@ -371,6 +371,7 @@ impl AppServerClient {
             }
             ApprovalStatus::TimedOut => (ReviewDecision::Denied, None),
             ApprovalStatus::Pending => (ReviewDecision::Denied, None),
+            ApprovalStatus::Answered { .. } => (ReviewDecision::Denied, None),
         };
         Ok(outcome)
     }

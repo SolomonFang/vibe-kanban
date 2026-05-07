@@ -360,6 +360,7 @@ function NewDisplayConversationEntry(props: Props) {
 
     case 'user_feedback':
     case 'loading':
+    case 'user_answered_questions':
       // Fallback to legacy component for these entry types
       return (
         <DisplayConversationEntry
