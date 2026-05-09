@@ -61,6 +61,11 @@
       "todoOperation": "{{operation}} todos"
     },
     "fixScript": "Fix Script",
+    "question": {
+      "awaiting": "Awaiting response...",
+      "timedOut": "Question timed out",
+      "answered": "Answered {{count}} question(s)"
+    },
     "subagent": {
       "defaultType": "Subagent"
     }

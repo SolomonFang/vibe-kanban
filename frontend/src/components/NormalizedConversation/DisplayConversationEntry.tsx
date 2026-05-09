@@ -23,6 +23,7 @@ import {
   Edit,
   Eye,
   Globe,
+  MessageCircleQuestion,
   Plus,
   Search,
   Settings,
@@ -32,6 +33,7 @@ import {
 } from 'lucide-react';
 import RawLogText from '../common/RawLogText';
 import UserMessage from './UserMessage';
+import AskUserQuestionBanner from './AskUserQuestionBanner';
 import PendingApprovalEntry from './PendingApprovalEntry';
 import { NextActionCard } from './NextActionCard';
 import { cn } from '@/lib/utils';
@@ -103,6 +105,8 @@ const getEntryIcon = (entryType: NormalizedEntryType) => {
       return <Globe className={iconSize} />;
     } else if (action_type.action === 'task_create') {
       return <Plus className={iconSize} />;
+    } else if (action_type.action === 'ask_user_question') {
+      return <MessageCircleQuestion className={iconSize} />;
     } else if (action_type.action === 'plan_presentation') {
       return <CheckSquare className={iconSize} />;
     } else if (action_type.action === 'tool') {
@@ -779,6 +783,21 @@ function DisplayConversationEntry({
       </div>
     );
   }
+  if (entryType.type === 'user_answered_questions') {
+    return (
+      <div className="px-4 py-2 text-sm">
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <MessageCircleQuestion className="h-3.5 w-3.5" />
+          <span>
+            {t('conversation.question.answered', {
+              count: entryType.answers.length,
+            })}
+          </span>
+        </div>
+      </div>
+    );
+  }
+
   const renderToolUse = () => {
     if (!isNormalizedEntry(entry)) return null;
     if (entryType.type !== 'tool_use') return null;
@@ -808,6 +827,14 @@ function DisplayConversationEntry({
               />
             ))}
           </div>
+        );
+      }
+
+      if (toolEntry.action_type.action === 'ask_user_question') {
+        return (
+          <AskUserQuestionBanner
+            questions={toolEntry.action_type.questions}
+          />
         );
       }
 
