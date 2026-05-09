@@ -20,7 +20,7 @@ use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 use ts_rs::TS;
 use workspace_utils::{
-    approvals::{ApprovalStatus, QuestionStatus},
+    approvals::{APPROVAL_TIMEOUT_SECONDS, ApprovalStatus, QuestionStatus},
     diff::create_unified_diff,
     log_msg::LogMsg,
     msg_store::MsgStore,
@@ -1509,7 +1509,8 @@ impl ClaudeLogProcessor {
                 approval_id,
             } => {
                 let requested_at = chrono::Utc::now();
-                let timeout_at = requested_at + chrono::Duration::minutes(5);
+                let timeout_at =
+                    requested_at + chrono::Duration::seconds(APPROVAL_TIMEOUT_SECONDS);
                 self.replace_tool_entry_status(
                     call_id,
                     ToolStatus::PendingApproval {

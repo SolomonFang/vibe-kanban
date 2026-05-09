@@ -5,7 +5,10 @@ use db::{self, DBService, models::execution_process::ExecutionProcess};
 use executors::approvals::{ExecutorApprovalError, ExecutorApprovalService};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
-use utils::approvals::{ApprovalRequest, ApprovalStatus, CreateApprovalRequest, QuestionStatus};
+use utils::approvals::{
+    APPROVAL_TIMEOUT_SECONDS, ApprovalRequest, ApprovalStatus, CreateApprovalRequest,
+    QuestionStatus,
+};
 use uuid::Uuid;
 
 use crate::services::{approvals::Approvals, notification::NotificationService};
@@ -101,7 +104,7 @@ impl ExecutorApprovalService for ExecutorApprovalBridge {
     ) -> Result<QuestionStatus, ExecutorApprovalError> {
         // Wait for user to answer via timeout or cancellation.
         // Full question UI integration requires frontend changes.
-        let timeout = tokio::time::Duration::from_secs(300); // 5 min
+        let timeout = tokio::time::Duration::from_secs(APPROVAL_TIMEOUT_SECONDS as u64);
         tokio::select! {
             _ = cancel.cancelled() => {
                 tracing::info!("Question request cancelled");
