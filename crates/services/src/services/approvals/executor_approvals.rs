@@ -6,8 +6,7 @@ use executors::approvals::{ExecutorApprovalError, ExecutorApprovalService};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 use utils::approvals::{
-    APPROVAL_TIMEOUT_SECONDS, ApprovalRequest, ApprovalStatus, CreateApprovalRequest,
-    QuestionStatus,
+    ApprovalRequest, ApprovalStatus, CreateApprovalRequest, QuestionStatus,
 };
 use uuid::Uuid;
 
@@ -96,24 +95,56 @@ impl ExecutorApprovalService for ExecutorApprovalBridge {
 
     async fn request_question_answer(
         &self,
-        _tool_name: &str,
-        _tool_input: Value,
-        _tool_call_id: &str,
+        tool_name: &str,
+        tool_input: Value,
+        tool_call_id: &str,
         _question_count: usize,
         cancel: CancellationToken,
     ) -> Result<QuestionStatus, ExecutorApprovalError> {
-        // Wait for user to answer via timeout or cancellation.
-        // Full question UI integration requires frontend changes.
-        let timeout = tokio::time::Duration::from_secs(APPROVAL_TIMEOUT_SECONDS as u64);
-        tokio::select! {
+        // Create an approval request so the frontend shows pending UI
+        let request = ApprovalRequest::from_create(
+            CreateApprovalRequest {
+                tool_name: tool_name.to_string(),
+                tool_input,
+                tool_call_id: tool_call_id.to_string(),
+            },
+            self.execution_process_id,
+        );
+
+        let approval_id = request.id.clone();
+
+        // Create both the approval waiter (for UI) and a question waiter (for answers)
+        let (_request, approval_waiter) = self
+            .approvals
+            .create_with_waiter(request)
+            .await
+            .map_err(ExecutorApprovalError::request_failed)?;
+
+        let question_waiter = self
+            .approvals
+            .add_question_waiter(&approval_id, self.execution_process_id);
+
+        // Wait for the user to answer, cancel, or timeout
+        let result = tokio::select! {
             _ = cancel.cancelled() => {
                 tracing::info!("Question request cancelled");
+                self.approvals.cancel(&approval_id).await;
                 Err(ExecutorApprovalError::Cancelled)
             }
-            _ = tokio::time::sleep(timeout) => {
-                tracing::warn!("Question request timed out (no answer mechanism)");
+            status = question_waiter.clone() => {
+                // User submitted answers via the respond endpoint
+                Ok(status)
+            }
+            status = approval_waiter.clone() => {
+                // Approval completed without question answers (denied or timed out)
+                tracing::info!("Question approval completed without answers: {:?}", status);
                 Ok(QuestionStatus::TimedOut)
             }
-        }
+        };
+
+        // Clean up
+        self.approvals.cancel(&approval_id).await;
+
+        result
     }
 }

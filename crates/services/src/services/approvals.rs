@@ -23,7 +23,7 @@ use sqlx::{Error as SqlxError, SqlitePool};
 use thiserror::Error;
 use tokio::sync::{RwLock, oneshot};
 use utils::{
-    approvals::{ApprovalRequest, ApprovalResponse, ApprovalStatus},
+    approvals::{ApprovalRequest, ApprovalResponse, ApprovalStatus, QuestionStatus},
     log_msg::LogMsg,
     msg_store::MsgStore,
 };
@@ -39,6 +39,7 @@ struct PendingApproval {
 }
 
 type ApprovalWaiter = Shared<BoxFuture<'static, ApprovalStatus>>;
+type QuestionWaiter = Shared<BoxFuture<'static, QuestionStatus>>;
 
 #[derive(Debug)]
 pub struct ToolContext {
@@ -46,9 +47,16 @@ pub struct ToolContext {
     pub execution_process_id: Uuid,
 }
 
+#[derive(Debug)]
+struct PendingQuestion {
+    execution_process_id: Uuid,
+    response_tx: oneshot::Sender<QuestionStatus>,
+}
+
 #[derive(Clone)]
 pub struct Approvals {
     pending: Arc<DashMap<String, PendingApproval>>,
+    pending_questions: Arc<DashMap<String, PendingQuestion>>,
     completed: Arc<DashMap<String, ApprovalStatus>>,
     msg_stores: Arc<RwLock<HashMap<Uuid, Arc<MsgStore>>>>,
 }
@@ -73,6 +81,7 @@ impl Approvals {
     pub fn new(msg_stores: Arc<RwLock<HashMap<Uuid, Arc<MsgStore>>>>) -> Self {
         Self {
             pending: Arc::new(DashMap::new()),
+            pending_questions: Arc::new(DashMap::new()),
             completed: Arc::new(DashMap::new()),
             msg_stores,
         }
@@ -137,6 +146,35 @@ impl Approvals {
         Ok((request, waiter))
     }
 
+    /// Stores a question waiter that resolves when the user submits answers
+    /// via the approvals respond endpoint with Answered status.
+    pub fn add_question_waiter(
+        &self,
+        approval_id: &str,
+        execution_process_id: Uuid,
+    ) -> QuestionWaiter {
+        let (tx, rx) = oneshot::channel();
+        let waiter: QuestionWaiter = rx
+            .map(|result| result.unwrap_or(QuestionStatus::TimedOut))
+            .boxed()
+            .shared();
+
+        self.pending_questions.insert(
+            approval_id.to_string(),
+            PendingQuestion {
+                execution_process_id,
+                response_tx: tx,
+            },
+        );
+
+        tracing::debug!(
+            "Created question waiter for approval '{}'",
+            approval_id
+        );
+
+        waiter
+    }
+
     #[tracing::instrument(skip(self, id, req))]
     pub async fn respond(
         &self,
@@ -144,6 +182,51 @@ impl Approvals {
         id: &str,
         req: ApprovalResponse,
     ) -> Result<(ApprovalStatus, ToolContext), ApprovalError> {
+        // Handle question answers: route to the question waiter
+        // and also complete the tool approval with Approved → Success.
+        if let ApprovalStatus::Answered { answers } = &req.status {
+            let answers_clone = answers.clone();
+
+            // Send answers to question waiter if one is waiting
+            if let Some((_, pq)) = self.pending_questions.remove(id) {
+                let _ = pq.response_tx.send(QuestionStatus::Answered {
+                    answers: answers_clone,
+                });
+            }
+
+            // Also complete the tool approval so the tool proceeds
+            if let Some((_, p)) = self.pending.remove(id) {
+                self.completed.insert(id.to_string(), req.status.clone());
+
+                // Send Approved to the approval waiter (the tool must proceed)
+                let _ = p.response_tx.send(ApprovalStatus::Approved);
+
+                // Update the tool entry status to Success
+                if let Some(store) = self.msg_store_by_id(&p.execution_process_id).await {
+                    if let Some(updated_entry) = p.entry.with_tool_status(ToolStatus::Success) {
+                        store.push_patch(ConversationPatch::replace(
+                            p.entry_index,
+                            updated_entry,
+                        ));
+                    }
+                }
+
+                return Ok((
+                    req.status,
+                    ToolContext {
+                        tool_name: p.tool_name,
+                        execution_process_id: p.execution_process_id,
+                    },
+                ));
+            }
+
+            // No pending approval found, but answers may have been sent to question waiter
+            if self.completed.contains_key(id) {
+                return Err(ApprovalError::AlreadyCompleted);
+            }
+            return Err(ApprovalError::NotFound);
+        }
+
         if let Some((_, p)) = self.pending.remove(id) {
             self.completed.insert(id.to_string(), req.status.clone());
             let _ = p.response_tx.send(req.status.clone());
@@ -201,6 +284,7 @@ impl Approvals {
         waiter: ApprovalWaiter,
     ) {
         let pending = self.pending.clone();
+        let pending_questions = self.pending_questions.clone();
         let completed = self.completed.clone();
         let msg_stores = self.msg_stores.clone();
 
@@ -225,6 +309,9 @@ impl Approvals {
                 if pending_approval.response_tx.send(status.clone()).is_err() {
                     tracing::debug!("approval '{}' timeout notification receiver dropped", id);
                 }
+
+                // Clean up any pending question for this approval
+                pending_questions.remove(&id);
 
                 let store = {
                     let map = msg_stores.read().await;

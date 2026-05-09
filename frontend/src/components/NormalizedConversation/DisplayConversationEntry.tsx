@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import WYSIWYGEditor from '@/components/ui/wysiwyg';
 import {
@@ -8,6 +8,7 @@ import {
   type NormalizedEntryType,
   type TaskWithAttemptStatus,
   type JsonValue,
+  type QuestionAnswer,
 } from 'shared/types.ts';
 import type { WorkspaceWithSession } from '@/types/attempt';
 import type { ProcessStartPayload } from '@/types/logs';
@@ -33,11 +34,14 @@ import {
 } from 'lucide-react';
 import RawLogText from '../common/RawLogText';
 import UserMessage from './UserMessage';
-import AskUserQuestionBanner from './AskUserQuestionBanner';
+import AskUserQuestionBanner, {
+  type AskUserQuestionBannerHandle,
+} from './AskUserQuestionBanner';
 import PendingApprovalEntry from './PendingApprovalEntry';
 import { NextActionCard } from './NextActionCard';
 import { cn } from '@/lib/utils';
 import { useRetryUi } from '@/contexts/RetryUiContext';
+import { approvalsApi } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import {
   ScriptFixerDialog,
@@ -798,6 +802,10 @@ function DisplayConversationEntry({
     );
   }
 
+  const bannerRef = useRef<AskUserQuestionBannerHandle>(null);
+  const [isAnswerSubmitting, setIsAnswerSubmitting] = useState(false);
+  const [answerError, setAnswerError] = useState<string | null>(null);
+
   const renderToolUse = () => {
     if (!isNormalizedEntry(entry)) return null;
     if (entryType.type !== 'tool_use') return null;
@@ -809,6 +817,60 @@ function DisplayConversationEntry({
       toolEntry.action_type.action === 'plan_presentation';
     const isPendingApproval = status.status === 'pending_approval';
     const defaultExpanded = isPendingApproval || isPlanPresentation;
+
+    // ask_user_question handles its own UX — bypass PendingApprovalEntry
+    if (toolEntry.action_type.action === 'ask_user_question') {
+      if (isPendingApproval) {
+        const approvalId = (
+          status as Extract<ToolStatus, { status: 'pending_approval' }>
+        ).approval_id;
+
+        const handleSubmitAnswers = async (answers: QuestionAnswer[]) => {
+          if (!executionProcessId) return;
+          setIsAnswerSubmitting(true);
+          setAnswerError(null);
+          try {
+            await approvalsApi.respond(approvalId, {
+              execution_process_id: executionProcessId,
+              status: { status: 'answered', answers },
+            });
+          } catch (e: unknown) {
+            const msg =
+              e instanceof Error ? e.message : 'Failed to submit answers';
+            setAnswerError(msg);
+            setIsAnswerSubmitting(false);
+          }
+        };
+
+        return (
+          <div
+            className={`px-4 py-2 text-sm ${greyed ? 'opacity-50 pointer-events-none' : ''}`}
+          >
+            <AskUserQuestionBanner
+              ref={bannerRef}
+              questions={toolEntry.action_type.questions}
+              onSubmitAnswers={handleSubmitAnswers}
+              isSubmitting={isAnswerSubmitting}
+              isTimedOut={false}
+              error={answerError}
+            />
+          </div>
+        );
+      }
+
+      // Non-pending status: show questions read-only
+      return (
+        <div
+          className={`px-4 py-2 text-sm space-y-3 ${greyed ? 'opacity-50 pointer-events-none' : ''}`}
+        >
+          <div
+            className={`whitespace-pre-wrap break-words text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/20 px-3 py-2 border-l-4 border-blue-400`}
+          >
+            {isNormalizedEntry(entry) ? entry.content : ''}
+          </div>
+        </div>
+      );
+    }
 
     const body = (() => {
       if (isFileEdit(toolEntry.action_type)) {
@@ -827,14 +889,6 @@ function DisplayConversationEntry({
               />
             ))}
           </div>
-        );
-      }
-
-      if (toolEntry.action_type.action === 'ask_user_question') {
-        return (
-          <AskUserQuestionBanner
-            questions={toolEntry.action_type.questions}
-          />
         );
       }
 
