@@ -184,6 +184,18 @@ function renderToolUseEntry(
     );
   }
 
+  // Ask user question - delegate to legacy component with banner
+  if (action_type.action === 'ask_user_question') {
+    return (
+      <DisplayConversationEntry
+        entry={entry}
+        expansionKey={expansionKey}
+        executionProcessId={executionProcessId}
+        taskAttempt={taskAttempt}
+      />
+    );
+  }
+
   // Todo management - use ChatTodoList
   if (action_type.action === 'todo_management') {
     return (
