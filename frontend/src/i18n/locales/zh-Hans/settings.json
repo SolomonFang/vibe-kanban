@@ -461,7 +461,9 @@
           "parallelLabel": "与编码代理并行运行设置脚本",
           "parallelHelper": "启用后，设置脚本将与编码代理同时运行，而不是等待设置完成后再启动。",
           "useWorktreeLabel": "使用 Git Worktree",
-          "useWorktreeHelper": "启用后，新工作空间将使用 git worktree 在隔离的临时目录中工作。禁用后，编码代理直接在原始仓库中操作。"
+          "useWorktreeHelper": "启用后，新工作空间将使用 git worktree 在隔离的临时目录中工作。禁用后，编码代理直接在原始仓库中操作。",
+          "autoCommitLabel": "自动提交变更",
+          "autoCommitHelper": "启用后，此仓库在编码代理或清理脚本成功执行后可能自动提交变更。禁用后将始终由你手动提交。"
         },
         "cleanup": {
           "label": "清理脚本",

@@ -169,7 +169,11 @@ export function ProjectTasks() {
       openTaskForm({ mode: 'create', projectId });
     }
   }, [projectId]);
-  const { query: searchQuery, iteration: searchIteration, focusInput } = useSearch();
+  const {
+    query: searchQuery,
+    iteration: searchIteration,
+    focusInput,
+  } = useSearch();
 
   const {
     tasks,
@@ -400,8 +404,9 @@ export function ProjectTasks() {
       );
     };
 
-    const matchesIteration = (taskIteration: string | null | undefined): boolean =>
-      !searchIteration || taskIteration === searchIteration;
+    const matchesIteration = (
+      taskIteration: string | null | undefined
+    ): boolean => !searchIteration || taskIteration === searchIteration;
 
     tasks.forEach((task) => {
       const statusKey = normalizeStatus(task.status);

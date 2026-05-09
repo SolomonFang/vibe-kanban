@@ -24,7 +24,10 @@ function getStoredIteration(projectId: string): string | null {
 function setStoredIteration(projectId: string, value: string | null): void {
   try {
     if (value) {
-      localStorage.setItem(`${ITERATION_STORAGE_KEY}:${projectId}`, JSON.stringify(value));
+      localStorage.setItem(
+        `${ITERATION_STORAGE_KEY}:${projectId}`,
+        JSON.stringify(value)
+      );
     } else {
       localStorage.removeItem(`${ITERATION_STORAGE_KEY}:${projectId}`);
     }
@@ -65,18 +68,21 @@ export function SearchProvider({ children }: SearchProviderProps) {
 
   // Restore iteration from localStorage when project changes
   useEffect(() => {
-      prevProjectRef.current = projectId;
-      const stored = getStoredIteration(projectId || '');
-      setIteration(stored);
+    prevProjectRef.current = projectId;
+    const stored = getStoredIteration(projectId || '');
+    setIteration(stored);
   }, [projectId]);
 
   // Persist iteration to localStorage on change
-  const handleSetIteration = useCallback((value: string | null) => {
-    setIteration(value);
-    if (projectId) {
-      setStoredIteration(projectId, value);
-    }
-  }, [projectId]);
+  const handleSetIteration = useCallback(
+    (value: string | null) => {
+      setIteration(value);
+      if (projectId) {
+        setStoredIteration(projectId, value);
+      }
+    },
+    [projectId]
+  );
 
   // Clear search and iteration when leaving tasks pages
   useEffect(() => {

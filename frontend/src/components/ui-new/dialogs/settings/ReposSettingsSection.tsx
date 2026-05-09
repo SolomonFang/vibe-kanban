@@ -31,6 +31,7 @@ interface RepoScriptsFormState {
   setup_script: string;
   parallel_setup_script: boolean;
   use_worktree: boolean;
+  auto_commit_enabled: boolean;
   cleanup_script: string;
   archive_script: string;
   copy_files: string;
@@ -45,6 +46,7 @@ function repoToFormState(repo: Repo): RepoScriptsFormState {
     setup_script: repo.setup_script ?? '',
     parallel_setup_script: repo.parallel_setup_script,
     use_worktree: repo.use_worktree,
+    auto_commit_enabled: repo.auto_commit_enabled ?? true,
     cleanup_script: repo.cleanup_script ?? '',
     archive_script: repo.archive_script ?? '',
     copy_files: repo.copy_files ?? '',
@@ -172,6 +174,7 @@ export function ReposSettingsSection({
         copy_files: draft.copy_files.trim() || null,
         parallel_setup_script: draft.parallel_setup_script,
         use_worktree: draft.use_worktree,
+        auto_commit_enabled: draft.auto_commit_enabled,
         dev_server_script: draft.dev_server_script.trim() || null,
       };
 
@@ -423,8 +426,16 @@ export function ReposSettingsSection({
               label={t('settings.repos.scripts.setup.useWorktreeLabel')}
               description={t('settings.repos.scripts.setup.useWorktreeHelper')}
               checked={draft.use_worktree}
+              onChange={(checked) => updateDraft({ use_worktree: checked })}
+            />
+
+            <SettingsCheckbox
+              id="repo-auto-commit-enabled"
+              label={t('settings.repos.scripts.setup.autoCommitLabel')}
+              description={t('settings.repos.scripts.setup.autoCommitHelper')}
+              checked={draft.auto_commit_enabled}
               onChange={(checked) =>
-                updateDraft({ use_worktree: checked })
+                updateDraft({ auto_commit_enabled: checked })
               }
             />
 

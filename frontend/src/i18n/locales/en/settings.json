@@ -461,7 +461,9 @@
           "parallelLabel": "Run setup script in parallel with coding agent",
           "parallelHelper": "When enabled, the setup script runs simultaneously with the coding agent instead of waiting for setup to complete first.",
           "useWorktreeLabel": "Use Git Worktree",
-          "useWorktreeHelper": "When enabled, new workspaces will use git worktrees in an isolated temp directory. When disabled, the coding agent works directly in the original repository."
+          "useWorktreeHelper": "When enabled, new workspaces will use git worktrees in an isolated temp directory. When disabled, the coding agent works directly in the original repository.",
+          "autoCommitLabel": "Auto-commit changes",
+          "autoCommitHelper": "When enabled, successful coding or cleanup executions can auto-commit changes for this repository. Disable this to always commit manually."
         },
         "cleanup": {
           "label": "Cleanup Script",

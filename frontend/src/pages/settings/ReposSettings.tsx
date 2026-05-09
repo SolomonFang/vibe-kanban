@@ -34,6 +34,7 @@ interface RepoScriptsFormState {
   setup_script: string;
   parallel_setup_script: boolean;
   use_worktree: boolean;
+  auto_commit_enabled: boolean;
   cleanup_script: string;
   copy_files: string;
   dev_server_script: string;
@@ -45,6 +46,7 @@ function repoToFormState(repo: Repo): RepoScriptsFormState {
     setup_script: repo.setup_script ?? '',
     parallel_setup_script: repo.parallel_setup_script,
     use_worktree: repo.use_worktree,
+    auto_commit_enabled: repo.auto_commit_enabled ?? true,
     cleanup_script: repo.cleanup_script ?? '',
     copy_files: repo.copy_files ?? '',
     dev_server_script: repo.dev_server_script ?? '',
@@ -184,6 +186,7 @@ export function ReposSettings() {
         copy_files: draft.copy_files.trim() || null,
         parallel_setup_script: draft.parallel_setup_script,
         use_worktree: draft.use_worktree,
+        auto_commit_enabled: draft.auto_commit_enabled,
         dev_server_script: draft.dev_server_script.trim() || null,
       };
 
@@ -419,6 +422,27 @@ export function ReposSettings() {
                 </div>
                 <p className="text-sm text-muted-foreground pl-6">
                   {t('settings.repos.scripts.setup.useWorktreeHelper')}
+                </p>
+
+                <div className="flex items-center space-x-2 pt-2">
+                  <Checkbox
+                    id="auto-commit-enabled"
+                    checked={draft.auto_commit_enabled}
+                    onCheckedChange={(checked) =>
+                      updateDraft({
+                        auto_commit_enabled: checked === true,
+                      })
+                    }
+                  />
+                  <Label
+                    htmlFor="auto-commit-enabled"
+                    className="text-sm font-normal cursor-pointer"
+                  >
+                    {t('settings.repos.scripts.setup.autoCommitLabel')}
+                  </Label>
+                </div>
+                <p className="text-sm text-muted-foreground pl-6">
+                  {t('settings.repos.scripts.setup.autoCommitHelper')}
                 </p>
               </div>
 

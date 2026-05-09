@@ -83,6 +83,7 @@ impl ProjectRepo {
                       r.copy_files,
                        r.parallel_setup_script as "parallel_setup_script!: bool",
                        r.use_worktree as "use_worktree!: bool",
+                       r.auto_commit_enabled as "auto_commit_enabled!: bool",
                        r.dev_server_script,
                       r.default_target_branch,
                       r.default_working_dir,

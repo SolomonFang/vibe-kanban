@@ -168,7 +168,13 @@ const TaskFormDialogImpl = NiceModal.create<TaskFormDialogProps>((props) => {
           iteration: navbarIteration ?? null,
         };
     }
-  }, [mode, props, system.config?.executor_profile, defaultRepoBranches, navbarIteration]);
+  }, [
+    mode,
+    props,
+    system.config?.executor_profile,
+    defaultRepoBranches,
+    navbarIteration,
+  ]);
 
   // Form submission handler
   const handleSubmit = async ({ value }: { value: TaskFormValues }) => {

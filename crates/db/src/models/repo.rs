@@ -28,6 +28,7 @@ pub struct Repo {
     pub copy_files: Option<String>,
     pub parallel_setup_script: bool,
     pub use_worktree: bool,
+    pub auto_commit_enabled: bool,
     pub dev_server_script: Option<String>,
     pub default_target_branch: Option<String>,
     pub default_working_dir: Option<String>,
@@ -101,6 +102,14 @@ pub struct UpdateRepo {
         skip_serializing_if = "Option::is_none",
         with = "double_option"
     )]
+    #[ts(optional, type = "boolean | null")]
+    pub auto_commit_enabled: Option<Option<bool>>,
+
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "double_option"
+    )]
     #[ts(optional, type = "string | null")]
     pub dev_server_script: Option<Option<String>>,
 
@@ -137,6 +146,7 @@ impl Repo {
                       copy_files,
                        parallel_setup_script as "parallel_setup_script!: bool",
                        use_worktree as "use_worktree!: bool",
+                       auto_commit_enabled as "auto_commit_enabled!: bool",
                        dev_server_script,
                       default_target_branch,
                       default_working_dir,
@@ -179,6 +189,7 @@ impl Repo {
                       copy_files,
                        parallel_setup_script as "parallel_setup_script!: bool",
                        use_worktree as "use_worktree!: bool",
+                       auto_commit_enabled as "auto_commit_enabled!: bool",
                        dev_server_script,
                       default_target_branch,
                       default_working_dir,
@@ -238,6 +249,7 @@ impl Repo {
                          copy_files,
                           parallel_setup_script as "parallel_setup_script!: bool",
                           use_worktree as "use_worktree!: bool",
+                          auto_commit_enabled as "auto_commit_enabled!: bool",
                           dev_server_script,
                          default_target_branch,
                          default_working_dir,
@@ -276,6 +288,7 @@ impl Repo {
                       copy_files,
                        parallel_setup_script as "parallel_setup_script!: bool",
                        use_worktree as "use_worktree!: bool",
+                       auto_commit_enabled as "auto_commit_enabled!: bool",
                        dev_server_script,
                       default_target_branch,
                       default_working_dir,
@@ -303,6 +316,7 @@ impl Repo {
                       r.copy_files,
                        r.parallel_setup_script as "parallel_setup_script!: bool",
                        r.use_worktree as "use_worktree!: bool",
+                       r.auto_commit_enabled as "auto_commit_enabled!: bool",
                        r.dev_server_script,
                       r.default_target_branch,
                       r.default_working_dir,
@@ -360,6 +374,10 @@ impl Repo {
             None => existing.use_worktree,
             Some(v) => v.unwrap_or(true),
         };
+        let auto_commit_enabled = match &payload.auto_commit_enabled {
+            None => existing.auto_commit_enabled,
+            Some(v) => v.unwrap_or(true),
+        };
         let dev_server_script = match &payload.dev_server_script {
             None => existing.dev_server_script,
             Some(v) => v.clone(),
@@ -383,11 +401,12 @@ impl Repo {
                    copy_files = $5,
                    parallel_setup_script = $6,
                    use_worktree = $7,
-                   dev_server_script = $8,
-                   default_target_branch = $9,
-                   default_working_dir = $10,
+                   auto_commit_enabled = $8,
+                   dev_server_script = $9,
+                   default_target_branch = $10,
+                   default_working_dir = $11,
                    updated_at = datetime('now', 'subsec')
-               WHERE id = $11
+               WHERE id = $12
                RETURNING id as "id!: Uuid",
                          path,
                          name,
@@ -398,6 +417,7 @@ impl Repo {
                          copy_files,
                          parallel_setup_script as "parallel_setup_script!: bool",
                          use_worktree as "use_worktree!: bool",
+                         auto_commit_enabled as "auto_commit_enabled!: bool",
                          dev_server_script,
                          default_target_branch,
                          default_working_dir,
@@ -410,6 +430,7 @@ impl Repo {
             copy_files,
             parallel_setup_script,
             use_worktree,
+            auto_commit_enabled,
             dev_server_script,
             default_target_branch,
             default_working_dir,

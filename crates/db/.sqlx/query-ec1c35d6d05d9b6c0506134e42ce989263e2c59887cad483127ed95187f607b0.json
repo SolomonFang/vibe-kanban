@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id as \"id!: Uuid\",\n                      path,\n                      name,\n                      display_name,\n                      setup_script,\n                      cleanup_script,\n                      archive_script,\n                      copy_files,\n                       parallel_setup_script as \"parallel_setup_script!: bool\",\n                       use_worktree as \"use_worktree!: bool\",\n                       dev_server_script,\n                      default_target_branch,\n                      default_working_dir,\n                      created_at as \"created_at!: DateTime<Utc>\",\n                      updated_at as \"updated_at!: DateTime<Utc>\"\n               FROM repos\n               ORDER BY display_name ASC",
+  "query": "INSERT INTO repos (id, path, name, display_name)\n               VALUES ($1, $2, $3, $4)\n               ON CONFLICT(path) DO UPDATE SET updated_at = updated_at\n               RETURNING id as \"id!: Uuid\",\n                         path,\n                         name,\n                         display_name,\n                         setup_script,\n                         cleanup_script,\n                         archive_script,\n                         copy_files,\n                          parallel_setup_script as \"parallel_setup_script!: bool\",\n                          use_worktree as \"use_worktree!: bool\",\n                          auto_commit_enabled as \"auto_commit_enabled!: bool\",\n                          dev_server_script,\n                         default_target_branch,\n                         default_working_dir,\n                         created_at as \"created_at!: DateTime<Utc>\",\n                         updated_at as \"updated_at!: DateTime<Utc>\"",
   "describe": {
     "columns": [
       {
@@ -54,33 +54,38 @@
         "type_info": "Bool"
       },
       {
-        "name": "dev_server_script",
+        "name": "auto_commit_enabled!: bool",
         "ordinal": 10,
-        "type_info": "Text"
+        "type_info": "Integer"
       },
       {
-        "name": "default_target_branch",
+        "name": "dev_server_script",
         "ordinal": 11,
         "type_info": "Text"
       },
       {
-        "name": "default_working_dir",
+        "name": "default_target_branch",
         "ordinal": 12,
         "type_info": "Text"
       },
       {
-        "name": "created_at!: DateTime<Utc>",
+        "name": "default_working_dir",
         "ordinal": 13,
         "type_info": "Text"
       },
       {
-        "name": "updated_at!: DateTime<Utc>",
+        "name": "created_at!: DateTime<Utc>",
         "ordinal": 14,
+        "type_info": "Text"
+      },
+      {
+        "name": "updated_at!: DateTime<Utc>",
+        "ordinal": 15,
         "type_info": "Text"
       }
     ],
     "parameters": {
-      "Right": 0
+      "Right": 4
     },
     "nullable": [
       true,
@@ -93,6 +98,7 @@
       true,
       false,
       false,
+      false,
       true,
       true,
       true,
@@ -100,5 +106,5 @@
       false
     ]
   },
-  "hash": "625aea9e34ca65dcc8f26f488a2bb907f0048c85089ce266e1940d2b7c7c8238"
+  "hash": "ec1c35d6d05d9b6c0506134e42ce989263e2c59887cad483127ed95187f607b0"
 }

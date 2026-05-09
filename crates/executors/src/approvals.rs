@@ -79,9 +79,7 @@ impl ExecutorApprovalService for NoopExecutorApprovalService {
         _question_count: usize,
         _cancel: CancellationToken,
     ) -> Result<QuestionStatus, ExecutorApprovalError> {
-        Ok(QuestionStatus::Answered {
-            answers: vec![],
-        })
+        Ok(QuestionStatus::Answered { answers: vec![] })
     }
 }
 

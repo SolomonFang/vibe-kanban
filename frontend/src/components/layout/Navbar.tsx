@@ -15,13 +15,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import {
-  FolderOpen,
-  Settings,
-  BookOpen,
-  Menu,
-  Plus,
-} from 'lucide-react';
+import { FolderOpen, Settings, BookOpen, Menu, Plus } from 'lucide-react';
 import { Logo } from '@/components/Logo';
 import { SearchBar } from '@/components/SearchBar';
 import { useSearch } from '@/contexts/SearchContext';
@@ -50,7 +44,7 @@ const EXTERNAL_LINKS = [
     label: 'Docs',
     icon: BookOpen,
     href: 'https://vibekanban.com/docs',
-  }
+  },
 ];
 
 function NavDivider() {
@@ -67,7 +61,15 @@ export function Navbar() {
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const { projectId, project } = useProject();
-  const { query, setQuery, iteration, setIteration, active, clear, registerInputRef } = useSearch();
+  const {
+    query,
+    setQuery,
+    iteration,
+    setIteration,
+    active,
+    clear,
+    registerInputRef,
+  } = useSearch();
   const handleOpenInEditor = useOpenProjectInEditor(project || null);
   const { loginStatus } = useUserSystem();
 

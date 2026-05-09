@@ -41,7 +41,7 @@ use crate::{
         codex::client::LogWriter, utils::reorder_slash_commands,
     },
     logs::{
-        ActionType, AskUserQuestionItem, AskUserQuestionOption, AnsweredQuestion, FileChange,
+        ActionType, AnsweredQuestion, AskUserQuestionItem, AskUserQuestionOption, FileChange,
         NormalizedEntry, NormalizedEntryError, NormalizedEntryType, TodoItem, ToolStatus,
         stderr_processor::normalize_stderr_logs,
         utils::{
@@ -56,9 +56,9 @@ fn base_command(claude_code_router: bool, native_binary: bool) -> &'static str {
     if claude_code_router {
         "npx -y @musistudio/claude-code-router@1.0.73 code"
     } else if native_binary {
-        "claude"
+        "npx -y @anthropic-ai/claude-code@2.1.112"
     } else {
-        "npx -y @anthropic-ai/claude-code@2.1.32"
+        "npx -y @anthropic-ai/claude-code@2.1.112"
     }
 }
 
@@ -134,13 +134,13 @@ impl ClaudeCode {
             );
         }
 
-        let native = self
-            .use_native_binary
-            .unwrap_or_else(detect_claude_binary);
+        let native = self.use_native_binary.unwrap_or_else(detect_claude_binary);
 
-        let mut builder =
-            CommandBuilder::new(base_command(self.claude_code_router.unwrap_or(false), native))
-                .params(["-p"]);
+        let mut builder = CommandBuilder::new(base_command(
+            self.claude_code_router.unwrap_or(false),
+            native,
+        ))
+        .params(["-p"]);
 
         let plan = self.plan.unwrap_or(false);
         let approvals = self.approvals.unwrap_or(false);
@@ -497,6 +497,29 @@ impl ClaudeLogProcessor {
         }
     }
 
+    fn replace_tool_entry_status(
+        &mut self,
+        tool_call_id: &str,
+        status: ToolStatus,
+        worktree_path: &str,
+        patches: &mut Vec<json_patch::Patch>,
+    ) {
+        if let Some(info) = self.tool_map.get(tool_call_id).cloned() {
+            let action_type = Self::extract_action_type(&info.tool_data, worktree_path);
+            let entry = NormalizedEntry {
+                timestamp: None,
+                entry_type: NormalizedEntryType::ToolUse {
+                    tool_name: info.tool_name.clone(),
+                    action_type,
+                    status,
+                },
+                content: info.content.clone(),
+                metadata: None,
+            };
+            patches.push(ConversationPatch::replace(info.entry_index, entry));
+        }
+    }
+
     /// Process raw logs and convert them to normalized entries with patches
     pub fn process_logs(
         msg_store: Arc<MsgStore>,
@@ -636,6 +659,7 @@ impl ClaudeLogProcessor {
             ClaudeJson::ToolResult { session_id, .. } => session_id.clone(),
             ClaudeJson::Result { session_id, .. } => session_id.clone(),
             ClaudeJson::StreamEvent { .. } => None, // session might not have been initialized yet
+            ClaudeJson::ApprovalRequested { .. } => None,
             ClaudeJson::ApprovalResponse { .. } => None,
             ClaudeJson::QuestionResponse { .. } => None,
             ClaudeJson::ControlRequest { .. } => None,
@@ -1479,11 +1503,33 @@ impl ClaudeLogProcessor {
                     patches.push(ConversationPatch::add_normalized_entry(idx, entry));
                 }
             }
+            ClaudeJson::ApprovalRequested {
+                call_id,
+                tool_name: _,
+                approval_id,
+            } => {
+                let requested_at = chrono::Utc::now();
+                let timeout_at = requested_at + chrono::Duration::minutes(5);
+                self.replace_tool_entry_status(
+                    call_id,
+                    ToolStatus::PendingApproval {
+                        approval_id: approval_id.clone(),
+                        requested_at,
+                        timeout_at,
+                    },
+                    worktree_path,
+                    &mut patches,
+                );
+            }
             ClaudeJson::ApprovalResponse {
-                call_id: _,
+                call_id,
                 tool_name,
                 approval_status,
             } => {
+                if let Some(status) = ToolStatus::from_approval_status(approval_status) {
+                    self.replace_tool_entry_status(call_id, status, worktree_path, &mut patches);
+                }
+
                 // Convert denials and timeouts to visible entries (matching Codex behavior)
                 let entry_opt = match approval_status {
                     ApprovalStatus::Pending => None,
@@ -1517,11 +1563,18 @@ impl ClaudeLogProcessor {
                 }
             }
             ClaudeJson::QuestionResponse {
-                call_id: _,
+                call_id,
                 tool_name: _,
                 question_status,
             } => match question_status {
                 QuestionStatus::Answered { answers } => {
+                    self.replace_tool_entry_status(
+                        call_id,
+                        ToolStatus::from_question_status(question_status),
+                        worktree_path,
+                        &mut patches,
+                    );
+
                     let qa_pairs: Vec<AnsweredQuestion> = answers
                         .iter()
                         .map(|qa| AnsweredQuestion {
@@ -1547,6 +1600,13 @@ impl ClaudeLogProcessor {
                     ));
                 }
                 QuestionStatus::TimedOut => {
+                    self.replace_tool_entry_status(
+                        call_id,
+                        ToolStatus::from_question_status(question_status),
+                        worktree_path,
+                        &mut patches,
+                    );
+
                     let idx = entry_index_provider.next();
                     patches.push(ConversationPatch::add_normalized_entry(
                         idx,
@@ -1942,12 +2002,21 @@ pub enum ClaudeJson {
         #[serde(default)]
         usage: Option<ClaudeUsage>,
     },
+    ApprovalRequested {
+        #[serde(alias = "tool_call_id")]
+        call_id: String,
+        #[serde(default)]
+        tool_name: String,
+        approval_id: String,
+    },
     ApprovalResponse {
+        #[serde(alias = "tool_call_id")]
         call_id: String,
         tool_name: String,
         approval_status: ApprovalStatus,
     },
     QuestionResponse {
+        #[serde(alias = "tool_call_id")]
         call_id: String,
         tool_name: String,
         question_status: QuestionStatus,
@@ -2585,6 +2654,174 @@ mod tests {
             ClaudeLogProcessor::extract_session_id(&parsed_tool),
             Some("another-session".to_string())
         );
+    }
+
+    #[test]
+    fn test_native_base_command_path() {
+        assert_eq!(base_command(false, true), "claude");
+        assert_eq!(
+            base_command(true, true),
+            "npx -y @musistudio/claude-code-router@1.0.73 code"
+        );
+    }
+
+    #[test]
+    fn test_approval_and_question_legacy_field_compatibility() {
+        let approval_json = r#"{"type":"approval_response","tool_call_id":"toolu_legacy","tool_name":"Bash","approval_status":{"status":"approved"}}"#;
+        let parsed_approval: ClaudeJson = serde_json::from_str(approval_json).unwrap();
+        assert!(matches!(
+            parsed_approval,
+            ClaudeJson::ApprovalResponse { .. }
+        ));
+
+        let question_json = r#"{"type":"question_response","tool_call_id":"toolu_legacy","tool_name":"AskUserQuestion","question_status":{"status":"timed_out"}}"#;
+        let parsed_question: ClaudeJson = serde_json::from_str(question_json).unwrap();
+        assert!(matches!(
+            parsed_question,
+            ClaudeJson::QuestionResponse { .. }
+        ));
+    }
+
+    #[test]
+    fn test_approval_question_status_updates_and_visibility() {
+        let mut processor = ClaudeLogProcessor::new();
+        let provider = EntryIndexProvider::test_new();
+
+        let assistant_with_tool = r#"{
+            "type":"assistant",
+            "message":{
+                "role":"assistant",
+                "content":[
+                    {"type":"tool_use","id":"toolu_123","name":"bash","input":{"command":"echo hi"}}
+                ]
+            }
+        }"#;
+        let parsed_assistant: ClaudeJson = serde_json::from_str(assistant_with_tool).unwrap();
+        let created_entries = patches_to_entries(&processor.normalize_entries(
+            &parsed_assistant,
+            "/tmp/work",
+            &provider,
+        ));
+        assert_eq!(created_entries.len(), 1);
+        assert!(matches!(
+            created_entries[0].entry_type,
+            NormalizedEntryType::ToolUse {
+                status: ToolStatus::Created,
+                ..
+            }
+        ));
+
+        let approval_requested = r#"{
+            "type":"approval_requested",
+            "tool_call_id":"toolu_123",
+            "tool_name":"Bash",
+            "approval_id":"approval_1"
+        }"#;
+        let parsed_requested: ClaudeJson = serde_json::from_str(approval_requested).unwrap();
+        let pending_entries = patches_to_entries(&processor.normalize_entries(
+            &parsed_requested,
+            "/tmp/work",
+            &provider,
+        ));
+        assert_eq!(pending_entries.len(), 1);
+        assert!(matches!(
+            pending_entries[0].entry_type,
+            NormalizedEntryType::ToolUse {
+                status: ToolStatus::PendingApproval { .. },
+                ..
+            }
+        ));
+
+        let denied_response = r#"{
+            "type":"approval_response",
+            "tool_call_id":"toolu_123",
+            "tool_name":"Bash",
+            "approval_status":{"status":"denied","reason":"not safe"}
+        }"#;
+        let parsed_denied: ClaudeJson = serde_json::from_str(denied_response).unwrap();
+        let denied_entries = patches_to_entries(&processor.normalize_entries(
+            &parsed_denied,
+            "/tmp/work",
+            &provider,
+        ));
+        assert_eq!(denied_entries.len(), 2);
+        assert!(denied_entries.iter().any(|entry| matches!(
+            entry.entry_type,
+            NormalizedEntryType::ToolUse {
+                status: ToolStatus::Denied { .. },
+                ..
+            }
+        )));
+        assert!(
+            denied_entries
+                .iter()
+                .any(|entry| matches!(entry.entry_type, NormalizedEntryType::UserFeedback { .. }))
+        );
+
+        let assistant_with_question = r#"{
+            "type":"assistant",
+            "message":{
+                "role":"assistant",
+                "content":[
+                    {"type":"tool_use","id":"question_1","name":"AskUserQuestion","input":{"questions":[{"question":"Pick one","header":"H","options":[{"label":"A","description":"a"}],"multiSelect":false}]}}
+                ]
+            }
+        }"#;
+        let parsed_question_tool: ClaudeJson =
+            serde_json::from_str(assistant_with_question).unwrap();
+        let _ = processor.normalize_entries(&parsed_question_tool, "/tmp/work", &provider);
+
+        let question_answered = r#"{
+            "type":"question_response",
+            "tool_call_id":"question_1",
+            "tool_name":"AskUserQuestion",
+            "question_status":{"status":"answered","answers":[{"question":"Pick one","answer":["A"]}]}
+        }"#;
+        let parsed_answered: ClaudeJson = serde_json::from_str(question_answered).unwrap();
+        let answered_entries = patches_to_entries(&processor.normalize_entries(
+            &parsed_answered,
+            "/tmp/work",
+            &provider,
+        ));
+        assert_eq!(answered_entries.len(), 2);
+        assert!(answered_entries.iter().any(|entry| matches!(
+            entry.entry_type,
+            NormalizedEntryType::ToolUse {
+                status: ToolStatus::Success,
+                ..
+            }
+        )));
+        assert!(answered_entries.iter().any(|entry| matches!(
+            entry.entry_type,
+            NormalizedEntryType::UserAnsweredQuestions { .. }
+        )));
+
+        let question_timeout = r#"{
+            "type":"question_response",
+            "tool_name":"AskUserQuestion",
+            "call_id":"question_1",
+            "question_status":{"status":"timed_out"}
+        }"#;
+        let parsed_timeout: ClaudeJson = serde_json::from_str(question_timeout).unwrap();
+        let timeout_entries = patches_to_entries(&processor.normalize_entries(
+            &parsed_timeout,
+            "/tmp/work",
+            &provider,
+        ));
+        assert_eq!(timeout_entries.len(), 2);
+        assert!(timeout_entries.iter().any(|entry| matches!(
+            entry.entry_type,
+            NormalizedEntryType::ToolUse {
+                status: ToolStatus::TimedOut,
+                ..
+            }
+        )));
+        assert!(timeout_entries.iter().any(|entry| matches!(
+            entry.entry_type,
+            NormalizedEntryType::ErrorMessage {
+                error_type: NormalizedEntryError::Other
+            }
+        )));
     }
 
     #[test]

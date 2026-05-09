@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT r.id as \"id!: Uuid\",\n                      r.path,\n                      r.name,\n                      r.display_name,\n                      r.setup_script,\n                      r.cleanup_script,\n                      r.archive_script,\n                      r.copy_files,\n                       r.parallel_setup_script as \"parallel_setup_script!: bool\",\n                       r.use_worktree as \"use_worktree!: bool\",\n                       r.dev_server_script,\n                      r.default_target_branch,\n                      r.default_working_dir,\n                      r.created_at as \"created_at!: DateTime<Utc>\",\n                      r.updated_at as \"updated_at!: DateTime<Utc>\",\n                      wr.target_branch\n               FROM repos r\n               JOIN workspace_repos wr ON r.id = wr.repo_id\n               WHERE wr.workspace_id = $1\n               ORDER BY r.display_name ASC",
+  "query": "SELECT r.id as \"id!: Uuid\",\n                      r.path,\n                      r.name,\n                      r.display_name,\n                      r.setup_script,\n                      r.cleanup_script,\n                      r.archive_script,\n                      r.copy_files,\n                       r.parallel_setup_script as \"parallel_setup_script!: bool\",\n                       r.use_worktree as \"use_worktree!: bool\",\n                       r.auto_commit_enabled as \"auto_commit_enabled!: bool\",\n                       r.dev_server_script,\n                      r.default_target_branch,\n                      r.default_working_dir,\n                      r.created_at as \"created_at!: DateTime<Utc>\",\n                      r.updated_at as \"updated_at!: DateTime<Utc>\",\n                      wr.target_branch\n               FROM repos r\n               JOIN workspace_repos wr ON r.id = wr.repo_id\n               WHERE wr.workspace_id = $1\n               ORDER BY r.display_name ASC",
   "describe": {
     "columns": [
       {
@@ -54,33 +54,38 @@
         "type_info": "Bool"
       },
       {
-        "name": "dev_server_script",
+        "name": "auto_commit_enabled!: bool",
         "ordinal": 10,
-        "type_info": "Text"
+        "type_info": "Integer"
       },
       {
-        "name": "default_target_branch",
+        "name": "dev_server_script",
         "ordinal": 11,
         "type_info": "Text"
       },
       {
-        "name": "default_working_dir",
+        "name": "default_target_branch",
         "ordinal": 12,
         "type_info": "Text"
       },
       {
-        "name": "created_at!: DateTime<Utc>",
+        "name": "default_working_dir",
         "ordinal": 13,
         "type_info": "Text"
       },
       {
-        "name": "updated_at!: DateTime<Utc>",
+        "name": "created_at!: DateTime<Utc>",
         "ordinal": 14,
         "type_info": "Text"
       },
       {
-        "name": "target_branch",
+        "name": "updated_at!: DateTime<Utc>",
         "ordinal": 15,
+        "type_info": "Text"
+      },
+      {
+        "name": "target_branch",
+        "ordinal": 16,
         "type_info": "Text"
       }
     ],
@@ -98,6 +103,7 @@
       true,
       false,
       false,
+      false,
       true,
       true,
       true,
@@ -106,5 +112,5 @@
       false
     ]
   },
-  "hash": "1f81e0ad53124162a1f062deed3970956db7a97042c743154d81d952778a7c83"
+  "hash": "0f8d4f8026c9c94e4c5707df445ca4f33cd82829621d8be31923190a1823b23c"
 }

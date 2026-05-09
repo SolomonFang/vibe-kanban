@@ -380,6 +380,15 @@ impl LocalContainerService {
         let mut any_committed = false;
 
         for (repo, worktree_path) in repos_with_changes {
+            if !repo.auto_commit_enabled {
+                tracing::info!(
+                    "Skipping auto-commit for repo '{}' ({}) due to repo setting",
+                    repo.name,
+                    repo.id
+                );
+                continue;
+            }
+
             tracing::debug!(
                 "Committing changes for repo '{}' at {:?}",
                 repo.name,
