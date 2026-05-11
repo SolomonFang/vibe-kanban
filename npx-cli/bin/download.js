@@ -8,10 +8,14 @@ const R2_BASE_URL = "__R2_PUBLIC_URL__";
 const BINARY_TAG = "__BINARY_TAG__"; // e.g., v0.0.135-20251215122030
 const CACHE_DIR = path.join(require("os").homedir(), ".vibe-kanban", "bin");
 
-// Local development mode: use binaries from npx-cli/dist/ instead of R2
-// Only activate if dist/ exists (i.e., running from source after local-build.sh)
+// Local development mode: use binaries from npx-cli/dist/ instead of R2.
+// Only activate when running from the actual source repo (has Cargo.toml at root),
+// not from an npm-installed package that happens to include a dist/ directory.
 const LOCAL_DIST_DIR = path.join(__dirname, "..", "dist");
-const LOCAL_DEV_MODE = fs.existsSync(LOCAL_DIST_DIR) || process.env.VIBE_KANBAN_LOCAL === "1";
+const LOCAL_DEV_MODE = process.env.VIBE_KANBAN_LOCAL === "1" || (() => {
+  const projectRoot = path.join(__dirname, "..", "..", "..");
+  return fs.existsSync(path.join(projectRoot, "Cargo.toml"));
+})();
 
 async function fetchJson(url) {
   return new Promise((resolve, reject) => {
@@ -97,16 +101,13 @@ async function downloadFile(url, destPath, expectedSha256, onProgress) {
 }
 
 async function ensureBinary(platform, binaryName, onProgress) {
-  // In local dev mode, use binaries directly from npx-cli/dist/
+  // In local dev mode, prefer binaries from npx-cli/dist/; fall back to R2
   if (LOCAL_DEV_MODE) {
     const localZipPath = path.join(LOCAL_DIST_DIR, platform, `${binaryName}.zip`);
     if (fs.existsSync(localZipPath)) {
       return localZipPath;
     }
-    throw new Error(
-      `Local binary not found: ${localZipPath}\n` +
-      `Run ./local-build.sh first to build the binaries.`
-    );
+    console.error(`Local binary not found for ${platform}, downloading from remote...`);
   }
 
   const cacheDir = path.join(CACHE_DIR, BINARY_TAG, platform);

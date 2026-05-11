@@ -71,10 +71,12 @@ function getBinaryName(base) {
 }
 
 const platformDir = getPlatformDir();
-// In local dev mode, extract directly to dist directory; otherwise use global cache
-const versionCacheDir = LOCAL_DEV_MODE
-  ? path.join(LOCAL_DIST_DIR, platformDir)
-  : path.join(CACHE_DIR, BINARY_TAG, platformDir);
+// In local dev mode with pre-built platform binaries, extract to dist/;
+// otherwise use the global cache (where R2 downloads land).
+const versionCacheDir =
+  LOCAL_DEV_MODE && fs.existsSync(path.join(LOCAL_DIST_DIR, platformDir))
+    ? path.join(LOCAL_DIST_DIR, platformDir)
+    : path.join(CACHE_DIR, BINARY_TAG, platformDir);
 
 function showProgress(downloaded, total) {
   const percent = total ? Math.round((downloaded / total) * 100) : 0;
