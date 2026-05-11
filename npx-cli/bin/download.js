@@ -13,7 +13,7 @@ const CACHE_DIR = path.join(require("os").homedir(), ".vibe-kanban", "bin");
 // not from an npm-installed package that happens to include a dist/ directory.
 const LOCAL_DIST_DIR = path.join(__dirname, "..", "dist");
 const LOCAL_DEV_MODE = process.env.VIBE_KANBAN_LOCAL === "1" || (() => {
-  const projectRoot = path.join(__dirname, "..", "..", "..");
+  const projectRoot = path.join(__dirname, "..", "..");
   return fs.existsSync(path.join(projectRoot, "Cargo.toml"));
 })();
 
