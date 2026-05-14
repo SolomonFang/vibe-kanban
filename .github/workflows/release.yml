@@ -1,6 +1,6 @@
 name: Release (multi-platform npm)
 
-# Builds vibe-kanban server/mcp/review binaries for Linux + macOS,
+# Builds vibe-kanban server/mcp/review binaries for Linux + macOS + Windows (x64),
 # bundles them into the npx-cli package, and publishes to npm.
 #
 # Trigger manually from Actions tab. Choose version bump or pass "skip"
@@ -113,7 +113,9 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  build-backend:
+  # Linux-only matrix. macOS Intel + Apple Silicon are built in one macos-14 job
+  # so we avoid macos-13 (Intel-hosted) runner queues which often sit "Waiting...".
+  build-backend-linux:
     needs: [bump-version, build-frontend]
     strategy:
       fail-fast: false
@@ -125,12 +127,6 @@ jobs:
           - name: linux-arm64
             os: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
-          - name: macos-x64
-            os: macos-13
-            target: x86_64-apple-darwin
-          - name: macos-arm64
-            os: macos-14
-            target: aarch64-apple-darwin
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -202,8 +198,156 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  build-backend-macos:
+    needs: [bump-version, build-frontend]
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.bump-version.outputs.ref }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-macos-both-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-macos-both-
+
+      - name: Build and package (macos-x64 + macos-arm64)
+        shell: bash
+        env:
+          VK_SHARED_API_BASE: "https://api.vibekanban.com"
+          VITE_VK_SHARED_API_BASE: "https://api.vibekanban.com"
+        run: |
+          set -euo pipefail
+          rm -rf dist
+          mkdir -p dist
+
+          build_and_zip() {
+            local target="$1"
+            local name="$2"
+            local dep_target="$3"
+            export MACOSX_DEPLOYMENT_TARGET="$dep_target"
+            cargo build --release --target "$target" \
+              --bin server --bin mcp_task_server --bin review
+            local out="dist/${name}"
+            mkdir -p "$out"
+            local bin_dir="target/${target}/release"
+            cp "$bin_dir/server"          vibe-kanban
+            cp "$bin_dir/mcp_task_server" vibe-kanban-mcp
+            cp "$bin_dir/review"          vibe-kanban-review
+            zip -q "$out/vibe-kanban.zip"        vibe-kanban
+            zip -q "$out/vibe-kanban-mcp.zip"    vibe-kanban-mcp
+            zip -q "$out/vibe-kanban-review.zip" vibe-kanban-review
+            rm -f vibe-kanban vibe-kanban-mcp vibe-kanban-review
+            ls -lh "$out"
+          }
+
+          build_and_zip x86_64-apple-darwin macos-x64 10.12
+          build_and_zip aarch64-apple-darwin macos-arm64 11.0
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backend-macos-x64
+          path: dist/macos-x64/
+          if-no-files-found: error
+          retention-days: 1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backend-macos-arm64
+          path: dist/macos-arm64/
+          if-no-files-found: error
+          retention-days: 1
+
+  # Windows x64 only (GitHub-hosted ARM64 Windows is not generally available).
+  build-backend-windows:
+    needs: [bump-version, build-frontend]
+    runs-on: windows-latest
+    env:
+      VK_SHARED_API_BASE: "https://api.vibekanban.com"
+      VITE_VK_SHARED_API_BASE: "https://api.vibekanban.com"
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.bump-version.outputs.ref }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-windows-x64-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-windows-x64-
+
+      - name: Build binaries
+        shell: pwsh
+        run: |
+          cargo build --release --target x86_64-pc-windows-msvc `
+            --bin server --bin mcp_task_server --bin review
+
+      - name: Package zips
+        shell: pwsh
+        run: |
+          $binDir = "target/x86_64-pc-windows-msvc/release"
+          $outRoot = "dist/windows-x64"
+          New-Item -ItemType Directory -Force -Path $outRoot | Out-Null
+
+          @(
+            @{ Src = "server.exe"; BinName = "vibe-kanban"; Zip = "vibe-kanban.zip" },
+            @{ Src = "mcp_task_server.exe"; BinName = "vibe-kanban-mcp"; Zip = "vibe-kanban-mcp.zip" },
+            @{ Src = "review.exe"; BinName = "vibe-kanban-review"; Zip = "vibe-kanban-review.zip" }
+          ) | ForEach-Object {
+            $staging = "./$($_.BinName).exe"
+            Copy-Item "$binDir/$($_.Src)" -Destination $staging
+            $zipPath = Join-Path $outRoot $_.Zip
+            if (Test-Path $zipPath) { Remove-Item $zipPath }
+            Compress-Archive -LiteralPath $staging -DestinationPath $zipPath
+            Remove-Item $staging
+          }
+          Get-ChildItem $outRoot
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backend-windows-x64
+          path: dist/windows-x64/
+          if-no-files-found: error
+          retention-days: 1
+
   publish:
-    needs: [bump-version, build-backend]
+    needs: [bump-version, build-backend-linux, build-backend-macos, build-backend-windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
