@@ -71,12 +71,13 @@ function getBinaryName(base) {
 }
 
 const platformDir = getPlatformDir();
-// In local dev mode with pre-built platform binaries, extract to dist/;
-// otherwise use the global cache (where R2 downloads land).
-const versionCacheDir =
-  LOCAL_DEV_MODE && fs.existsSync(path.join(LOCAL_DIST_DIR, platformDir))
-    ? path.join(LOCAL_DIST_DIR, platformDir)
-    : path.join(CACHE_DIR, BINARY_TAG, platformDir);
+const bundledPlatformDir = path.join(LOCAL_DIST_DIR, platformDir);
+const usingBundledDist = fs.existsSync(bundledPlatformDir);
+// If the package ships a zip for this platform, use it directly.
+// Otherwise fall back to the global cache (where remote downloads land).
+const versionCacheDir = usingBundledDist
+  ? bundledPlatformDir
+  : path.join(CACHE_DIR, BINARY_TAG, platformDir);
 
 function showProgress(downloaded, total) {
   const percent = total ? Math.round((downloaded / total) * 100) : 0;
@@ -150,9 +151,9 @@ async function main() {
   const isMcpMode = args.includes("--mcp");
   const isReviewMode = args[0] === "review";
 
-  // Non-blocking update check (skip in MCP mode, local dev mode, and when R2 URL not configured)
+  // Non-blocking update check (skip when running from bundled dist, local dev mode, or when R2 not configured)
   const hasValidR2Url = !R2_BASE_URL.startsWith("__");
-  if (!isMcpMode && !LOCAL_DEV_MODE && hasValidR2Url) {
+  if (!isMcpMode && !LOCAL_DEV_MODE && !usingBundledDist && hasValidR2Url) {
     getLatestVersion()
       .then((latest) => {
         if (latest && latest !== CLI_VERSION) {
@@ -189,7 +190,11 @@ async function main() {
       });
     });
   } else {
-    const modeLabel = LOCAL_DEV_MODE ? " (local dev)" : "";
+    const modeLabel = LOCAL_DEV_MODE
+      ? " (local dev)"
+      : usingBundledDist
+        ? " (bundled)"
+        : "";
     console.log(`Starting vibe-kanban v${CLI_VERSION}${modeLabel}...`);
     await extractAndRun("vibe-kanban", (bin) => {
       if (platform === "win32") {

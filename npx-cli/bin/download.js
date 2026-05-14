@@ -100,14 +100,35 @@ async function downloadFile(url, destPath, expectedSha256, onProgress) {
   });
 }
 
+function getBundledPlatforms() {
+  try {
+    return fs
+      .readdirSync(LOCAL_DIST_DIR, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
 async function ensureBinary(platform, binaryName, onProgress) {
-  // In local dev mode, prefer binaries from npx-cli/dist/; fall back to R2
-  if (LOCAL_DEV_MODE) {
-    const localZipPath = path.join(LOCAL_DIST_DIR, platform, `${binaryName}.zip`);
-    if (fs.existsSync(localZipPath)) {
-      return localZipPath;
-    }
-    console.error(`Local binary not found for ${platform}, downloading from remote...`);
+  // Always prefer packaged local zips when available.
+  // Works for both source repo (LOCAL_DEV_MODE) and installed npm package (bundled dist).
+  const localZipPath = path.join(LOCAL_DIST_DIR, platform, `${binaryName}.zip`);
+  if (fs.existsSync(localZipPath)) {
+    return localZipPath;
+  }
+
+  const hasRemoteConfig =
+    !R2_BASE_URL.startsWith("__") && !BINARY_TAG.startsWith("__");
+  if (!hasRemoteConfig) {
+    const bundled = getBundledPlatforms();
+    const list = bundled.length ? bundled.join(", ") : "none";
+    throw new Error(
+      `No bundled binary for ${platform}. Bundled platforms: ${list}. ` +
+        "Remote download is not configured in this package."
+    );
   }
 
   const cacheDir = path.join(CACHE_DIR, BINARY_TAG, platform);
