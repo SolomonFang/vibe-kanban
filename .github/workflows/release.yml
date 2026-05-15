@@ -1,7 +1,7 @@
 name: Release (multi-platform npm)
 
-# Builds vibe-kanban server/mcp/review binaries for Linux + macOS + Windows (x64),
-# bundles them into the npx-cli package, and publishes to npm.
+# Bundles binaries as GitHub Release assets and publishes a small npm package
+# (~100 KB) that downloads the correct zip per platform (npm rejects ~280MB tarballs).
 #
 # Trigger manually from Actions tab. Choose version bump or pass "skip"
 # to publish the version currently in npx-cli/package.json.
@@ -365,19 +365,56 @@ jobs:
           pattern: backend-*
           path: artifacts/
 
-      - name: Assemble npx-cli/dist
+      - name: Prepare GitHub Release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          for d in artifacts/backend-*; do
+            platform="${d#artifacts/backend-}"
+            for z in "$d"/*.zip; do
+              base=$(basename "$z" .zip)
+              cp "$z" "release-assets/${platform}-${base}.zip"
+            done
+          done
+          echo "Release assets:"
+          ls -lh release-assets
+
+      # npm rejects tarball uploads > ~100MB; bundle zips as GitHub Release assets instead.
+      - name: Create GitHub Release and upload binaries
+        if: ${{ !inputs.dry_run }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.bump-version.outputs.new_tag }}
+          name: ${{ needs.bump-version.outputs.new_tag }}
+          generate_release_notes: true
+          allowUpdates: true
+          fail_on_unmatched_files: true
+          files: release-assets/*.zip
+
+      - name: Point CLI at release assets (npm package)
+        if: ${{ !inputs.dry_run }}
+        shell: bash
+        env:
+          RELEASE_BASE: https://github.com/${{ github.repository }}/releases/download/${{ needs.bump-version.outputs.new_tag }}
+        run: |
+          set -euo pipefail
+          sed -i "s|__RELEASE_ASSET_BASE__|${RELEASE_BASE}|g" npx-cli/bin/download.js
+          grep -q "releases/download" npx-cli/bin/download.js ||
+            { echo "sed failed"; exit 1; }
+
+      - name: Shrink npm package (no bundled dist/)
         shell: bash
         run: |
           set -euo pipefail
           rm -rf npx-cli/dist
-          mkdir -p npx-cli/dist
-          for d in artifacts/backend-*; do
-            platform="${d#artifacts/backend-}"
-            mkdir -p "npx-cli/dist/${platform}"
-            cp "${d}"/*.zip "npx-cli/dist/${platform}/"
-          done
-          echo "Final layout:"
-          find npx-cli/dist -type f | sort
+          node <<'NODE'
+          const fs = require("fs");
+          const dir = "./npx-cli/package.json";
+          const p = JSON.parse(fs.readFileSync(dir, "utf8"));
+          p.files = ["bin", "README.md"];
+          fs.writeFileSync(dir, JSON.stringify(p, null, 2) + "\n");
+          NODE
 
       - name: Pack preview
         run: |
@@ -391,11 +428,3 @@ jobs:
         run: |
           cd npx-cli
           npm publish --access public
-
-      - name: Create GitHub Release
-        if: ${{ inputs.version_bump != 'skip' && !inputs.dry_run }}
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.bump-version.outputs.new_tag }}
-          name: ${{ needs.bump-version.outputs.new_tag }}
-          generate_release_notes: true

@@ -3,9 +3,12 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 
-// Replaced during npm pack by workflow
+// Replaced during npm pack by workflow (R2 / legacy)
 const R2_BASE_URL = "__R2_PUBLIC_URL__";
 const BINARY_TAG = "__BINARY_TAG__"; // e.g., v0.0.135-20251215122030
+// Replaced in CI: https://github.com/owner/repo/releases/download/v1.2.3
+const RELEASE_ASSET_BASE = "__RELEASE_ASSET_BASE__";
+const PKG_VERSION = require("../package.json").version;
 const CACHE_DIR = path.join(require("os").homedir(), ".vibe-kanban", "bin");
 
 // Local development mode: use binaries from npx-cli/dist/ instead of R2.
@@ -112,6 +115,18 @@ function getBundledPlatforms() {
   }
 }
 
+function releaseAssetBaseConfigured() {
+  return RELEASE_ASSET_BASE && !RELEASE_ASSET_BASE.startsWith("__");
+}
+
+function r2Configured() {
+  return !R2_BASE_URL.startsWith("__") && !BINARY_TAG.startsWith("__");
+}
+
+function cacheVersionKey() {
+  return BINARY_TAG.startsWith("__") ? PKG_VERSION : BINARY_TAG;
+}
+
 async function ensureBinary(platform, binaryName, onProgress) {
   // Always prefer packaged local zips when available.
   // Works for both source repo (LOCAL_DEV_MODE) and installed npm package (bundled dist).
@@ -120,35 +135,39 @@ async function ensureBinary(platform, binaryName, onProgress) {
     return localZipPath;
   }
 
-  const hasRemoteConfig =
-    !R2_BASE_URL.startsWith("__") && !BINARY_TAG.startsWith("__");
-  if (!hasRemoteConfig) {
-    const bundled = getBundledPlatforms();
-    const list = bundled.length ? bundled.join(", ") : "none";
-    throw new Error(
-      `No bundled binary for ${platform}. Bundled platforms: ${list}. ` +
-        "Remote download is not configured in this package."
-    );
-  }
-
-  const cacheDir = path.join(CACHE_DIR, BINARY_TAG, platform);
+  const cacheDir = path.join(CACHE_DIR, cacheVersionKey(), platform);
   const zipPath = path.join(cacheDir, `${binaryName}.zip`);
-
   if (fs.existsSync(zipPath)) return zipPath;
-
   fs.mkdirSync(cacheDir, { recursive: true });
 
-  const manifest = await fetchJson(`${R2_BASE_URL}/binaries/${BINARY_TAG}/manifest.json`);
-  const binaryInfo = manifest.platforms?.[platform]?.[binaryName];
-
-  if (!binaryInfo) {
-    throw new Error(`Binary ${binaryName} not available for ${platform}`);
+  // GitHub Release assets (small npm tarball; binaries attached to the same tag)
+  if (releaseAssetBaseConfigured()) {
+    const base = RELEASE_ASSET_BASE.replace(/\/$/, "");
+    const asset = `${platform}-${binaryName}.zip`;
+    const url = `${base}/${encodeURIComponent(asset)}`;
+    await downloadFile(url, zipPath, null, onProgress);
+    return zipPath;
   }
 
-  const url = `${R2_BASE_URL}/binaries/${BINARY_TAG}/${platform}/${binaryName}.zip`;
-  await downloadFile(url, zipPath, binaryInfo.sha256, onProgress);
+  if (r2Configured()) {
+    const manifest = await fetchJson(`${R2_BASE_URL}/binaries/${BINARY_TAG}/manifest.json`);
+    const binaryInfo = manifest.platforms?.[platform]?.[binaryName];
 
-  return zipPath;
+    if (!binaryInfo) {
+      throw new Error(`Binary ${binaryName} not available for ${platform}`);
+    }
+
+    const url = `${R2_BASE_URL}/binaries/${BINARY_TAG}/${platform}/${binaryName}.zip`;
+    await downloadFile(url, zipPath, binaryInfo.sha256, onProgress);
+    return zipPath;
+  }
+
+  const bundled = getBundledPlatforms();
+  const list = bundled.length ? bundled.join(", ") : "none";
+  throw new Error(
+    `No bundled binary for ${platform}. Bundled platforms: ${list}. ` +
+      "Remote download is not configured in this package."
+  );
 }
 
 async function getLatestVersion() {
@@ -156,4 +175,13 @@ async function getLatestVersion() {
   return manifest.latest;
 }
 
-module.exports = { R2_BASE_URL, BINARY_TAG, CACHE_DIR, LOCAL_DEV_MODE, LOCAL_DIST_DIR, ensureBinary, getLatestVersion };
+module.exports = {
+  R2_BASE_URL,
+  BINARY_TAG,
+  RELEASE_ASSET_BASE,
+  CACHE_DIR,
+  LOCAL_DEV_MODE,
+  LOCAL_DIST_DIR,
+  ensureBinary,
+  getLatestVersion,
+};

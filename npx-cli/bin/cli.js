@@ -73,11 +73,12 @@ function getBinaryName(base) {
 const platformDir = getPlatformDir();
 const bundledPlatformDir = path.join(LOCAL_DIST_DIR, platformDir);
 const usingBundledDist = fs.existsSync(bundledPlatformDir);
+const cacheKey = BINARY_TAG.startsWith("__") ? CLI_VERSION : BINARY_TAG;
 // If the package ships a zip for this platform, use it directly.
 // Otherwise fall back to the global cache (where remote downloads land).
 const versionCacheDir = usingBundledDist
   ? bundledPlatformDir
-  : path.join(CACHE_DIR, BINARY_TAG, platformDir);
+  : path.join(CACHE_DIR, cacheKey, platformDir);
 
 function showProgress(downloaded, total) {
   const percent = total ? Math.round((downloaded / total) * 100) : 0;
