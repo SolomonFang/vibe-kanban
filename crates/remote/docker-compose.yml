@@ -65,9 +65,9 @@ services:
       VIBEKANBAN_REMOTE_JWT_SECRET: ${VIBEKANBAN_REMOTE_JWT_SECRET:?set in .env.remote}
       # Optional — leave empty to disable invitation emails
       LOOPS_EMAIL_API_KEY: ${LOOPS_EMAIL_API_KEY:-}
-      SERVER_PUBLIC_BASE_URL: http://localhost:3000
-      VITE_APP_BASE_URL: http://localhost:3000
-      VITE_API_BASE_URL: http://localhost:3000
+      SERVER_PUBLIC_BASE_URL: http://localhost:7964
+      VITE_APP_BASE_URL: http://localhost:7964
+      VITE_API_BASE_URL: http://localhost:7964
       ELECTRIC_ROLE_PASSWORD: ${ELECTRIC_ROLE_PASSWORD:-remote}
       R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
       R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
@@ -85,7 +85,7 @@ services:
       STRIPE_FREE_SEAT_LIMIT: ${STRIPE_FREE_SEAT_LIMIT:-1}
 
     ports:
-      - "127.0.0.1:3000:8081"
+      - "127.0.0.1:7964:8081"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8081/health"]

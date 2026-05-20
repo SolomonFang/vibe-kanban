@@ -67,15 +67,15 @@ USER appuser
 
 # Set runtime environment
 ENV HOST=0.0.0.0
-ENV PORT=3000
-EXPOSE 3000
+ENV PORT=7964
+EXPOSE 7964
 
 # Set working directory
 WORKDIR /repos
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget --quiet --tries=1 --spider "http://${HOST:-localhost}:${PORT:-3000}" || exit 1
+    CMD wget --quiet --tries=1 --spider "http://${HOST:-localhost}:${PORT:-7964}" || exit 1
 
 # Run the application
 ENTRYPOINT ["/sbin/tini", "--"]

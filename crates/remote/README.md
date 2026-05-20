@@ -31,14 +31,14 @@ Generate `VIBEKANBAN_REMOTE_JWT_SECRET` once using `openssl rand -base64 48` and
 docker compose --env-file ../../.env.remote -f docker-compose.yml up --build
 ```
 
-Exposes the web UI and API on `http://localhost:3000` (mapped from internal port 8081). The Postgres service is available at `postgres://remote:remote@localhost:5433/remote`.
+Exposes the web UI and API on `http://localhost:7964` (mapped from internal port 8081). The Postgres service is available at `postgres://remote:remote@localhost:5433/remote`.
 
 ## Run Vibe Kanban
 
 To connect the desktop client to your local remote server:
 
 ```bash
-export VK_SHARED_API_BASE=http://localhost:3000
+export VK_SHARED_API_BASE=http://localhost:7964
 
 pnpm run dev
 ```

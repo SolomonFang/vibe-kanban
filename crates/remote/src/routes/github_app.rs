@@ -471,7 +471,7 @@ pub async fn handle_callback(
         .config
         .server_public_base_url
         .clone()
-        .unwrap_or_else(|| "http://localhost:3000".to_string());
+        .unwrap_or_else(|| "http://localhost:7964".to_string());
 
     // Helper to redirect with error
     let redirect_error = |org_id: Option<Uuid>, error: &str| -> Response {
