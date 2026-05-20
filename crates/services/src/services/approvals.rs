@@ -61,6 +61,10 @@ pub struct Approvals {
     msg_stores: Arc<RwLock<HashMap<Uuid, Arc<MsgStore>>>>,
 }
 
+/// How long to wait for the normalized `tool_use` log line before giving up on UI registration.
+const TOOL_MATCH_MAX_WAIT: StdDuration = StdDuration::from_secs(5);
+const TOOL_MATCH_POLL_INTERVAL: StdDuration = StdDuration::from_millis(25);
+
 #[derive(Debug, Error)]
 pub enum ApprovalError {
     #[error("approval request not found")]
@@ -98,28 +102,75 @@ impl Approvals {
             .shared();
         let req_id = request.id.clone();
 
-        if let Some(store) = self.msg_store_by_id(&request.execution_process_id).await {
-            // Find the matching tool use entry by name and input
-            let matching_tool = find_matching_tool_use(store.clone(), &request.tool_call_id);
+        if !self
+            .register_pending_tool_approval(&request, &req_id, tx)
+            .await
+        {
+            tracing::error!(
+                "Failed to register approval UI for tool='{}' call_id={} after {:?}",
+                request.tool_name,
+                request.tool_call_id,
+                TOOL_MATCH_MAX_WAIT
+            );
+        }
 
-            if let Some((idx, matching_tool)) = matching_tool {
-                let approval_entry = matching_tool
-                    .with_tool_status(ToolStatus::PendingApproval {
-                        approval_id: req_id.clone(),
-                        requested_at: request.created_at,
-                        timeout_at: request.timeout_at,
-                    })
-                    .ok_or(ApprovalError::NoToolUseEntry)?;
+        self.spawn_timeout_watcher(req_id.clone(), request.timeout_at, waiter.clone());
+        Ok((request, waiter))
+    }
+
+    /// Attach `pending_approval` to the matching tool_use log entry and register the waiter.
+    ///
+    /// `can_use_tool` often runs before log normalization adds the tool row; poll briefly so the
+    /// web UI receives a `pending_approval` patch and the user can respond.
+    async fn register_pending_tool_approval(
+        &self,
+        request: &ApprovalRequest,
+        req_id: &str,
+        response_tx: oneshot::Sender<ApprovalStatus>,
+    ) -> bool {
+        let Some(store) = self
+            .msg_store_by_id(&request.execution_process_id)
+            .await
+        else {
+            tracing::warn!(
+                "No msg_store found for execution_process_id: {}",
+                request.execution_process_id
+            );
+            let _ = response_tx.send(ApprovalStatus::Denied {
+                reason: Some("Executor session log store not available".to_string()),
+            });
+            return false;
+        };
+
+        let deadline = tokio::time::Instant::now() + TOOL_MATCH_MAX_WAIT;
+        loop {
+            if let Some((idx, matching_tool)) =
+                find_matching_tool_use(store.clone(), &request.tool_call_id)
+            {
+                let Some(approval_entry) = matching_tool.with_tool_status(ToolStatus::PendingApproval {
+                    approval_id: req_id.to_string(),
+                    requested_at: request.created_at,
+                    timeout_at: request.timeout_at,
+                }) else {
+                    tracing::warn!(
+                        "Matching tool use entry for approval '{}' could not be updated",
+                        req_id
+                    );
+                    let _ = response_tx.send(ApprovalStatus::Denied {
+                        reason: Some("Could not update tool status for approval".to_string()),
+                    });
+                    return false;
+                };
                 store.push_patch(ConversationPatch::replace(idx, approval_entry));
 
                 self.pending.insert(
-                    req_id.clone(),
+                    req_id.to_string(),
                     PendingApproval {
                         entry_index: idx,
                         entry: matching_tool,
                         execution_process_id: request.execution_process_id,
                         tool_name: request.tool_name.clone(),
-                        response_tx: tx,
+                        response_tx,
                     },
                 );
                 tracing::debug!(
@@ -128,22 +179,28 @@ impl Approvals {
                     request.tool_name,
                     idx
                 );
-            } else {
+                return true;
+            }
+
+            if tokio::time::Instant::now() >= deadline {
                 tracing::warn!(
-                    "No matching tool use entry found for approval request: tool='{}', execution_process_id={}",
+                    "No matching tool use entry found for approval request after {:?}: tool='{}', call_id={}, execution_process_id={}",
+                    TOOL_MATCH_MAX_WAIT,
                     request.tool_name,
+                    request.tool_call_id,
                     request.execution_process_id
                 );
+                let _ = response_tx.send(ApprovalStatus::Denied {
+                    reason: Some(
+                        "Approval UI could not be shown (tool log not ready). Retry the action."
+                            .to_string(),
+                    ),
+                });
+                return false;
             }
-        } else {
-            tracing::warn!(
-                "No msg_store found for execution_process_id: {}",
-                request.execution_process_id
-            );
-        }
 
-        self.spawn_timeout_watcher(req_id.clone(), request.timeout_at, waiter.clone());
-        Ok((request, waiter))
+            tokio::time::sleep(TOOL_MATCH_POLL_INTERVAL).await;
+        }
     }
 
     /// Stores a question waiter that resolves when the user submits answers
