@@ -362,6 +362,23 @@ jobs:
           registry-url: https://registry.npmjs.org
           always-auth: true
 
+      # Run early so auth is checked even if a later step fails. Uses the workflow
+      # file from the branch you select when clicking "Run workflow" (not Re-run).
+      - name: Verify npm authentication
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error::NPM_TOKEN is empty in this job."
+            echo "If the secret lives under an Environment, add 'environment: <name>' to the publish job."
+            echo "Re-running an old workflow run uses the OLD workflow file — trigger a new run instead."
+            exit 1
+          fi
+          echo "registry=$(npm config get registry)"
+          npm whoami
+          npm view helios-kanban version
+
       - name: Download platform artifacts
         uses: actions/download-artifact@v4
         with:
@@ -423,22 +440,6 @@ jobs:
         run: |
           cd npx-cli
           npm pack --dry-run
-
-      - name: Verify npm authentication
-        if: ${{ !inputs.dry_run }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "::error::NPM_TOKEN is empty in this job."
-            echo "If the secret lives under an Environment (e.g. production), add 'environment: <name>' to the publish job."
-            echo "Fork workflows do not receive repository secrets."
-            exit 1
-          fi
-          echo "registry=$(npm config get registry)"
-          npm whoami
-          npm view helios-kanban version
 
       - name: Publish to npm
         if: ${{ !inputs.dry_run }}
