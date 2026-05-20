@@ -355,9 +355,12 @@ jobs:
           ref: ${{ needs.bump-version.outputs.ref }}
 
       - uses: actions/setup-node@v4
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         with:
           node-version: ${{ env.NODE_VERSION }}
           registry-url: https://registry.npmjs.org
+          always-auth: true
 
       - name: Download platform artifacts
         uses: actions/download-artifact@v4
@@ -421,10 +424,27 @@ jobs:
           cd npx-cli
           npm pack --dry-run
 
+      - name: Verify npm authentication
+        if: ${{ !inputs.dry_run }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error::NPM_TOKEN is empty in this job."
+            echo "If the secret lives under an Environment (e.g. production), add 'environment: <name>' to the publish job."
+            echo "Fork workflows do not receive repository secrets."
+            exit 1
+          fi
+          echo "registry=$(npm config get registry)"
+          npm whoami
+          npm view helios-kanban version
+
       - name: Publish to npm
         if: ${{ !inputs.dry_run }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
+          set -euo pipefail
           cd npx-cli
-          npm publish --access public
+          npm publish --access public --registry https://registry.npmjs.org
