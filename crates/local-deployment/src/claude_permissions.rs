@@ -107,33 +107,9 @@ async fn ensure_claude_permissions_for_worktree(
 mod tests {
     use std::fs;
 
-    use chrono::Utc;
     use tempfile::tempdir;
-    use uuid::Uuid;
 
     use super::*;
-
-    fn test_repo(name: &str, path: std::path::PathBuf, use_worktree: bool) -> Repo {
-        let now = Utc::now();
-        Repo {
-            id: Uuid::new_v4(),
-            path,
-            name: name.to_string(),
-            display_name: name.to_string(),
-            setup_script: None,
-            cleanup_script: None,
-            archive_script: None,
-            copy_files: None,
-            parallel_setup_script: false,
-            use_worktree,
-            auto_commit_enabled: false,
-            dev_server_script: None,
-            default_target_branch: None,
-            default_working_dir: None,
-            created_at: now,
-            updated_at: now,
-        }
-    }
 
     #[tokio::test]
     async fn writes_default_settings_when_source_has_no_claude_dir() {
@@ -142,9 +118,7 @@ mod tests {
         let worktree = workspace.path().join("my-repo");
         fs::create_dir_all(&worktree).unwrap();
 
-        let repo = test_repo("my-repo", source.path().to_path_buf(), true);
-
-        ensure_claude_permissions_for_workspace(workspace.path(), std::slice::from_ref(&repo))
+        ensure_claude_permissions_for_worktree(&worktree, source.path())
             .await
             .unwrap();
 
@@ -168,9 +142,7 @@ mod tests {
         )
         .unwrap();
 
-        let repo = test_repo("my-repo", source.path().to_path_buf(), true);
-
-        ensure_claude_permissions_for_workspace(workspace.path(), std::slice::from_ref(&repo))
+        ensure_claude_permissions_for_worktree(&worktree, source.path())
             .await
             .unwrap();
 
