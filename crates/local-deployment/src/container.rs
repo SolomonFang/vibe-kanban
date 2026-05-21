@@ -1077,6 +1077,11 @@ impl ContainerService for LocalContainerService {
 
         Self::create_workspace_config_files(&created_workspace.workspace_dir, &repositories)
             .await?;
+        crate::claude_permissions::ensure_claude_permissions_for_workspace(
+            &created_workspace.workspace_dir,
+            &repositories,
+        )
+        .await?;
 
         Workspace::update_container_ref(
             &self.db.pool,
@@ -1140,6 +1145,11 @@ impl ContainerService for LocalContainerService {
             .await?;
 
         Self::create_workspace_config_files(&workspace_dir, &repositories).await?;
+        crate::claude_permissions::ensure_claude_permissions_for_workspace(
+            &workspace_dir,
+            &repositories,
+        )
+        .await?;
 
         Ok(workspace_dir.to_string_lossy().to_string())
     }

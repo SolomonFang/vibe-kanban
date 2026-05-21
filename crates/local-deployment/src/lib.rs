@@ -32,6 +32,7 @@ use utils::{
 use uuid::Uuid;
 
 use crate::{container::LocalContainerService, pty::PtyService};
+mod claude_permissions;
 mod command;
 pub mod container;
 mod copy;
