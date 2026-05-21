@@ -174,7 +174,6 @@ impl ToolStatus {
             }),
             ApprovalStatus::TimedOut => Some(ToolStatus::TimedOut),
             ApprovalStatus::Pending => None, // this should not happen
-            ApprovalStatus::Answered { .. } => None, // questions use QuestionStatus instead
         }
     }
 

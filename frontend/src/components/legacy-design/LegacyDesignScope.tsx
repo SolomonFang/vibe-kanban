@@ -1,5 +1,6 @@
 import { ReactNode, useState } from 'react';
 import { PortalContainerContext } from '@/contexts/PortalContainerContext';
+import { ApprovalsProvider } from '@/contexts/ApprovalsContext';
 import NiceModal from '@ebay/nice-modal-react';
 import '@/styles/legacy/index.css';
 
@@ -11,12 +12,14 @@ export function LegacyDesignScope({ children }: LegacyDesignScopeProps) {
   const [container, setContainer] = useState<HTMLElement | null>(null);
 
   return (
-    <div ref={setContainer} className="legacy-design min-h-screen">
-      {container && (
-        <PortalContainerContext.Provider value={container}>
-          <NiceModal.Provider>{children}</NiceModal.Provider>
-        </PortalContainerContext.Provider>
-      )}
-    </div>
+    <ApprovalsProvider>
+      <div ref={setContainer} className="legacy-design min-h-screen">
+        {container && (
+          <PortalContainerContext.Provider value={container}>
+            <NiceModal.Provider>{children}</NiceModal.Provider>
+          </PortalContainerContext.Provider>
+        )}
+      </div>
+    </ApprovalsProvider>
   );
 }

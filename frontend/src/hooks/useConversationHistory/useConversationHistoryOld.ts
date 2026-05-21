@@ -6,9 +6,14 @@ import {
   PatchType,
   ToolStatus,
 } from 'shared/types';
+import type { TokenUsageInfo } from 'shared/types';
 import { useExecutionProcessesContext } from '@/contexts/ExecutionProcessesContext';
+import { useEntries } from '@/contexts/EntriesContext';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
-import { streamJsonPatchEntries } from '@/utils/streamJsonPatchEntries';
+import {
+  extractTokenUsageFromEntries,
+  streamJsonPatchEntries,
+} from '@/utils/streamJsonPatchEntries';
 import type {
   AddEntryType,
   ExecutionProcessStateStore,
@@ -35,6 +40,8 @@ export const useConversationHistoryOld = ({
   const loadedInitialEntries = useRef(false);
   const streamingProcessIdsRef = useRef<Set<string>>(new Set());
   const onEntriesUpdatedRef = useRef<OnEntriesUpdated | null>(null);
+  const latestTokenUsageRef = useRef<TokenUsageInfo | null>(null);
+  const { setTokenUsageInfo } = useEntries();
 
   const mergeIntoDisplayed = (
     mutator: (state: ExecutionProcessStateStore) => void
@@ -69,7 +76,16 @@ export const useConversationHistoryOld = ({
 
     return new Promise<PatchType[]>((resolve) => {
       const controller = streamJsonPatchEntries<PatchType>(url, {
+        onTokenUsage: (info) => {
+          latestTokenUsageRef.current = info;
+          setTokenUsageInfo(info);
+        },
         onFinished: (allEntries) => {
+          const tokenFromSnapshot = extractTokenUsageFromEntries(allEntries);
+          if (tokenFromSnapshot) {
+            latestTokenUsageRef.current = tokenFromSnapshot;
+            setTokenUsageInfo(tokenFromSnapshot);
+          }
           controller.close();
           resolve(allEntries);
         },
@@ -376,7 +392,21 @@ export const useConversationHistoryOld = ({
         }
       }
 
-      onEntriesUpdatedRef.current?.(entries, modifiedAddEntryType, loading);
+      const tokenUsage =
+        latestTokenUsageRef.current ??
+        extractTokenUsageFromEntries(
+          Object.values(executionProcessState).flatMap((p) => p.entries)
+        );
+      if (tokenUsage) {
+        latestTokenUsageRef.current = tokenUsage;
+      }
+
+      onEntriesUpdatedRef.current?.(
+        entries,
+        modifiedAddEntryType,
+        loading,
+        tokenUsage
+      );
     },
     [flattenEntriesForEmit]
   );
@@ -392,10 +422,25 @@ export const useConversationHistoryOld = ({
           url = `/api/execution-processes/${executionProcess.id}/normalized-logs/ws`;
         }
         const controller = streamJsonPatchEntries<PatchType>(url, {
+          onTokenUsage: (info) => {
+            latestTokenUsageRef.current = info;
+            setTokenUsageInfo(info);
+          },
           onEntries(entries) {
-            const patchesWithKey = entries.map((entry, index) =>
-              patchWithKey(entry, executionProcess.id, index)
-            );
+            const tokenFromSnapshot = extractTokenUsageFromEntries(entries);
+            if (tokenFromSnapshot) {
+              latestTokenUsageRef.current = tokenFromSnapshot;
+              setTokenUsageInfo(tokenFromSnapshot);
+            }
+
+            const patchesWithKey: PatchTypeWithKey[] = [];
+            entries.forEach((entry, index) => {
+              if (entry != null) {
+                patchesWithKey.push(
+                  patchWithKey(entry, executionProcess.id, index)
+                );
+              }
+            });
             mergeIntoDisplayed((state) => {
               state[executionProcess.id] = {
                 executionProcess,
@@ -409,14 +454,18 @@ export const useConversationHistoryOld = ({
             controller.close();
             resolve();
           },
-          onError: () => {
+          onError: (err) => {
+            console.warn(
+              `normalized-logs stream error for process ${executionProcess.id}:`,
+              err
+            );
             controller.close();
-            reject();
+            reject(err);
           },
         });
       });
     },
-    [emitEntries]
+    [emitEntries, setTokenUsageInfo]
   );
 
   // Sometimes it can take a few seconds for the stream to start, wrap the loadRunningAndEmit method
@@ -629,13 +678,13 @@ export const useConversationHistoryOld = ({
     }
   }, [attempt.id, idListKey, executionProcessesRaw]);
 
-  // Reset state when attempt changes
+  // Reset state when workspace changes (do not emit — avoids blank next_action-only rows)
   useEffect(() => {
     displayedExecutionProcesses.current = {};
     loadedInitialEntries.current = false;
+    latestTokenUsageRef.current = null;
     streamingProcessIdsRef.current.clear();
-    emitEntries(displayedExecutionProcesses.current, 'initial', true);
-  }, [attempt.id, emitEntries]);
+  }, [attempt.id]);
 
   return {};
 };

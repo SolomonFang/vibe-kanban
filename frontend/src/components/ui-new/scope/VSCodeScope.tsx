@@ -5,6 +5,7 @@ import {
   useWorkspaceContext,
 } from '@/contexts/WorkspaceContext';
 import { ActionsProvider } from '@/contexts/ActionsContext';
+import { ApprovalsProvider } from '@/contexts/ApprovalsContext';
 import { ExecutionProcessesProvider } from '@/contexts/ExecutionProcessesContext';
 import { LogsPanelProvider } from '@/contexts/LogsPanelContext';
 import NiceModal from '@ebay/nice-modal-react';
@@ -33,33 +34,27 @@ function ExecutionProcessesProviderWrapper({
 
 /**
  * VSCodeScope - Minimal provider stack for VS Code extension
- *
- * This is a stripped-down version of NewDesignScope that excludes:
- * - SequenceTrackerProvider (keyboard sequences)
- * - SequenceIndicator (key sequence hints)
- * - KeyboardShortcutsHandler (g>s, w>d, v>c shortcuts)
- * - useWorkspaceShortcuts hook
- *
- * This prevents keyboard shortcuts from interfering with VS Code's own shortcuts.
  */
 export function VSCodeScope({ children }: VSCodeScopeProps) {
   const [container, setContainer] = useState<HTMLElement | null>(null);
 
   return (
     <div ref={setContainer} className="new-design h-full">
-      {container && (
-        <PortalContainerContext.Provider value={container}>
-          <WorkspaceProvider>
-            <ExecutionProcessesProviderWrapper>
-              <LogsPanelProvider>
-                <ActionsProvider>
-                  <NiceModal.Provider>{children}</NiceModal.Provider>
-                </ActionsProvider>
-              </LogsPanelProvider>
-            </ExecutionProcessesProviderWrapper>
-          </WorkspaceProvider>
-        </PortalContainerContext.Provider>
-      )}
+      <WorkspaceProvider>
+        <ApprovalsProvider>
+          <ExecutionProcessesProviderWrapper>
+            <LogsPanelProvider>
+              <ActionsProvider>
+                {container ? (
+                  <PortalContainerContext.Provider value={container}>
+                    <NiceModal.Provider>{children}</NiceModal.Provider>
+                  </PortalContainerContext.Provider>
+                ) : null}
+              </ActionsProvider>
+            </LogsPanelProvider>
+          </ExecutionProcessesProviderWrapper>
+        </ApprovalsProvider>
+      </WorkspaceProvider>
     </div>
   );
 }

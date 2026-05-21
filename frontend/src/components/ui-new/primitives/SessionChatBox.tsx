@@ -192,7 +192,9 @@ export function SessionChatBox({
   const { capabilities } = useUserSystem();
 
   const supportsContextUsage =
-    agent && capabilities?.[agent]?.includes(BaseAgentCapability.CONTEXT_USAGE);
+    (tokenUsageInfo != null && tokenUsageInfo.model_context_window > 0) ||
+    (agent != null &&
+      capabilities?.[agent]?.includes(BaseAgentCapability.CONTEXT_USAGE));
 
   // Determine if in feedback mode, edit mode, or approval mode
   const isInFeedbackMode = feedbackMode?.isActive ?? false;

@@ -59,6 +59,21 @@
       "todoOperation": "{{operation}} 待办事项"
     },
     "fixScript": "修复脚本",
+    "question": {
+      "awaiting": "等待回复…",
+      "timedOut": "问题已超时",
+      "answered": "已回答 {{count}} 个问题",
+      "askUser": {
+        "title": "向用户提问",
+        "progress": "（{{current}}/{{total}}）",
+        "multiSelect": "可多选",
+        "confirmSelection": "确认选择",
+        "other": "其他：",
+        "customPlaceholder": "输入自定义答案后按 Enter…",
+        "submit": "提交",
+        "submitting": "提交中…"
+      }
+    },
     "subagent": {
       "defaultType": "子代理"
     }

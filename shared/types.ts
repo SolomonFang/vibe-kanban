@@ -164,11 +164,13 @@ export type MergeStatus = "open" | "merged" | "closed" | "unknown";
 
 export type PullRequestInfo = { number: bigint, url: string, status: MergeStatus, merged_at: string | null, merge_commit_sha: string | null, };
 
-export type ApprovalStatus = { "status": "pending" } | { "status": "approved" } | { "status": "denied", reason?: string, } | { "status": "answered", answers: Array<QuestionAnswer>, } | { "status": "timed_out" };
+export type ApprovalInfo = { approval_id: string, tool_name: string, execution_process_id: string, is_question: boolean, created_at: string, timeout_at: string, };
 
-export type CreateApprovalRequest = { tool_name: string, tool_input: JsonValue, tool_call_id: string, };
+export type ApprovalStatus = { "status": "pending" } | { "status": "approved" } | { "status": "denied", reason?: string, } | { "status": "timed_out" };
 
-export type ApprovalResponse = { execution_process_id: string, status: ApprovalStatus, };
+export type ApprovalOutcome = { "status": "approved" } | { "status": "denied", reason?: string, } | { "status": "answered", answers: Array<QuestionAnswer>, } | { "status": "timed_out" };
+
+export type ApprovalResponse = { execution_process_id: string, status: ApprovalOutcome, };
 
 export type QuestionAnswer = { question: string, answer: Array<string>, };
 

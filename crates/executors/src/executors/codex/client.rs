@@ -301,8 +301,8 @@ impl AppServerClient {
     async fn request_tool_approval(
         &self,
         tool_name: &str,
-        tool_input: Value,
-        tool_call_id: &str,
+        _tool_input: Value,
+        _tool_call_id: &str,
     ) -> Result<ApprovalStatus, ExecutorError> {
         if self.auto_approve {
             return Ok(ApprovalStatus::Approved);
@@ -312,8 +312,11 @@ impl AppServerClient {
             .as_ref()
             .ok_or(ExecutorApprovalError::ServiceUnavailable)?;
 
+        let approval_id = approval_service
+            .create_tool_approval(tool_name)
+            .await?;
         Ok(approval_service
-            .request_tool_approval(tool_name, tool_input, tool_call_id, self.cancel.clone())
+            .wait_tool_approval(&approval_id, self.cancel.clone())
             .await?)
     }
 
@@ -371,7 +374,6 @@ impl AppServerClient {
             }
             ApprovalStatus::TimedOut => (ReviewDecision::Denied, None),
             ApprovalStatus::Pending => (ReviewDecision::Denied, None),
-            ApprovalStatus::Answered { .. } => (ReviewDecision::Denied, None),
         };
         Ok(outcome)
     }

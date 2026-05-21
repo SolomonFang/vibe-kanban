@@ -7,7 +7,7 @@ import {
   useState,
 } from 'react';
 import type { ReactNode } from 'react';
-import type { ApprovalStatus, ToolStatus } from 'shared/types';
+import type { ApprovalOutcome, ToolStatus } from 'shared/types';
 import { Button } from '@/components/ui/button';
 import {
   Tooltip,
@@ -251,7 +251,7 @@ const PendingApprovalEntry = ({
       setIsResponding(true);
       setError(null);
 
-      const status: ApprovalStatus = approved
+      const status: ApprovalOutcome = approved
         ? { status: 'approved' }
         : { status: 'denied', reason };
 

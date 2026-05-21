@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes, useParams } from 'react-router-dom';
 import { I18nextProvider } from 'react-i18next';
 import i18n from '@/i18n';
 import { Projects } from '@/pages/Projects';
@@ -7,7 +7,6 @@ import { ProjectTasks } from '@/pages/ProjectTasks';
 import { FullAttemptLogsPage } from '@/pages/FullAttemptLogs';
 import { Migration } from '@/pages/Migration';
 import { NormalLayout } from '@/components/layout/NormalLayout';
-import { SharedAppLayout } from '@/components/ui-new/containers/SharedAppLayout';
 import { usePostHog } from 'posthog-js/react';
 import { useAuth } from '@/hooks';
 import { usePreviousPath } from '@/hooks/usePreviousPath';
@@ -33,44 +32,37 @@ import { ThemeMode } from 'shared/types';
 import { DisclaimerDialog } from '@/components/dialogs/global/DisclaimerDialog';
 import { OnboardingDialog } from '@/components/dialogs/global/OnboardingDialog';
 import { ReleaseNotesDialog } from '@/components/dialogs/global/ReleaseNotesDialog';
-import { ClickedElementsProvider } from './contexts/ClickedElementsProvider';
+import { ClickedElementsProvider } from '@/contexts/ClickedElementsProvider';
 
-// Design scope components
 import { LegacyDesignScope } from '@/components/legacy-design/LegacyDesignScope';
-import { NewDesignScope } from '@/components/ui-new/scope/NewDesignScope';
-import { VSCodeScope } from '@/components/ui-new/scope/VSCodeScope';
-import { TerminalProvider } from '@/contexts/TerminalContext';
 
-// New design pages
-import { Workspaces } from '@/pages/ui-new/Workspaces';
-import { VSCodeWorkspacePage } from '@/pages/ui-new/VSCodeWorkspacePage';
-import { WorkspacesLanding } from '@/pages/ui-new/WorkspacesLanding';
-import { ElectricTestPage } from '@/pages/ui-new/ElectricTestPage';
-import { ProjectKanban } from '@/pages/ui-new/ProjectKanban';
-import { MigratePage } from '@/pages/ui-new/MigratePage';
+/** Legacy-only: redirect old new-UI bookmarks to local-projects. */
+function RedirectProjectsToLocal() {
+  const { projectId } = useParams();
+  return (
+    <Navigate
+      to={projectId ? `/local-projects/${projectId}` : '/local-projects'}
+      replace
+    />
+  );
+}
 
 function AppContent() {
   const { config, analyticsUserId, updateAndSaveConfig } = useUserSystem();
   const posthog = usePostHog();
   const { isSignedIn } = useAuth();
 
-  // Track previous path for back navigation
   usePreviousPath();
-
-  // Sync UI preferences with server scratch storage
   useUiPreferencesScratch();
 
-  // Handle opt-in/opt-out and user identification when config loads
   useEffect(() => {
     if (!posthog || !analyticsUserId) return;
 
     if (config?.analytics_enabled) {
       posthog.opt_in_capturing();
       posthog.identify(analyticsUserId);
-      console.log('[Analytics] Analytics enabled and user identified');
     } else {
       posthog.opt_out_capturing();
-      console.log('[Analytics] Analytics disabled by user preference');
     }
   }, [config?.analytics_enabled, analyticsUserId, posthog]);
 
@@ -79,7 +71,6 @@ function AppContent() {
     let cancelled = false;
 
     const showNextStep = async () => {
-      // 1) Disclaimer - first step
       if (!config.disclaimer_acknowledged) {
         await DisclaimerDialog.show();
         if (!cancelled) {
@@ -89,7 +80,6 @@ function AppContent() {
         return;
       }
 
-      // 2) Onboarding - configure executor and editor
       if (!config.onboarding_acknowledged) {
         const result = await OnboardingDialog.show();
         if (!cancelled) {
@@ -103,7 +93,6 @@ function AppContent() {
         return;
       }
 
-      // 3) Release notes - last step
       if (config.show_release_notes) {
         await ReleaseNotesDialog.show();
         if (!cancelled) {
@@ -121,22 +110,20 @@ function AppContent() {
     };
   }, [config, isSignedIn, updateAndSaveConfig]);
 
-  // TODO: Disabled while developing FE only
-  // if (loading) {
-  //   return (
-  //     <div className="min-h-screen bg-background flex items-center justify-center">
-  //       <Loader message="Loading..." size={32} />
-  //     </div>
-  //   );
-  // }
-
   return (
     <I18nextProvider i18n={i18n}>
       <ThemeProvider initialTheme={config?.theme || ThemeMode.SYSTEM}>
         <SearchProvider>
           <Routes>
-            {/* ========== LEGACY DESIGN ROUTES ========== */}
-            {/* VS Code full-page logs route (outside NormalLayout for minimal UI) */}
+            {/* Redirect former new-UI URLs to legacy routes */}
+            <Route
+              path="/workspaces/*"
+              element={<Navigate to="/local-projects" replace />}
+            />
+            <Route path="/projects/:projectId/*" element={<RedirectProjectsToLocal />} />
+            <Route path="/projects/:projectId" element={<RedirectProjectsToLocal />} />
+            <Route path="/migrate" element={<Navigate to="/migration" replace />} />
+
             <Route
               path="/local-projects/:projectId/tasks/:taskId/attempts/:attemptId/full"
               element={
@@ -186,65 +173,6 @@ function AppContent() {
                 element={<ProjectTasks />}
               />
             </Route>
-
-            {/* ========== NEW DESIGN ROUTES ========== */}
-            {/* VS Code workspace route (standalone, no layout, no keyboard shortcuts) */}
-            <Route
-              path="/workspaces/:workspaceId/vscode"
-              element={
-                <VSCodeScope>
-                  <TerminalProvider>
-                    <VSCodeWorkspacePage />
-                  </TerminalProvider>
-                </VSCodeScope>
-              }
-            />
-
-            {/* Unified layout for workspaces and projects - AppBar/Navbar rendered once */}
-            <Route
-              element={
-                <NewDesignScope>
-                  <TerminalProvider>
-                    <SharedAppLayout />
-                  </TerminalProvider>
-                </NewDesignScope>
-              }
-            >
-              {/* Workspaces routes */}
-              <Route path="/workspaces" element={<WorkspacesLanding />} />
-              <Route path="/workspaces/create" element={<Workspaces />} />
-              <Route
-                path="/workspaces/electric-test"
-                element={<ElectricTestPage />}
-              />
-              <Route path="/workspaces/:workspaceId" element={<Workspaces />} />
-
-              {/* Projects routes */}
-              <Route path="/projects/:projectId" element={<ProjectKanban />} />
-              <Route
-                path="/projects/:projectId/issues/new"
-                element={<ProjectKanban />}
-              />
-              <Route
-                path="/projects/:projectId/issues/:issueId"
-                element={<ProjectKanban />}
-              />
-              <Route
-                path="/projects/:projectId/issues/:issueId/workspaces/:workspaceId"
-                element={<ProjectKanban />}
-              />
-              <Route
-                path="/projects/:projectId/issues/:issueId/workspaces/create/:draftId"
-                element={<ProjectKanban />}
-              />
-              <Route
-                path="/projects/:projectId/workspaces/create/:draftId"
-                element={<ProjectKanban />}
-              />
-
-              {/* Migration route */}
-              <Route path="/migrate" element={<MigratePage />} />
-            </Route>
           </Routes>
         </SearchProvider>
       </ThemeProvider>
@@ -259,12 +187,7 @@ function App() {
         <ClickedElementsProvider>
           <ProjectProvider>
             <HotkeysProvider
-              initiallyActiveScopes={[
-                'global',
-                'workspace',
-                'kanban',
-                'projects',
-              ]}
+              initiallyActiveScopes={['global', 'workspace', 'kanban']}
             >
               <AppContent />
             </HotkeysProvider>

@@ -5,6 +5,7 @@ import { ArrowsOutIcon, XIcon } from '@phosphor-icons/react';
 import { useProjectContext } from '@/contexts/remote/ProjectContext';
 import { useUserContext } from '@/contexts/remote/UserContext';
 import { useWorkspaceContext } from '@/contexts/WorkspaceContext';
+import { ApprovalsProvider } from '@/contexts/ApprovalsContext';
 import { ExecutionProcessesProvider } from '@/contexts/ExecutionProcessesContext';
 import { ApprovalFeedbackProvider } from '@/contexts/ApprovalFeedbackContext';
 import { EntriesProvider } from '@/contexts/EntriesContext';
@@ -172,6 +173,7 @@ function WorkspaceSessionPanel({
       attemptId={workspaceId}
       sessionId={selectedSessionId}
     >
+      <ApprovalsProvider>
       <ApprovalFeedbackProvider>
         <EntriesProvider key={`${workspaceId}-${selectedSessionId ?? 'new'}`}>
           <MessageEditProvider>
@@ -269,6 +271,7 @@ function WorkspaceSessionPanel({
           </MessageEditProvider>
         </EntriesProvider>
       </ApprovalFeedbackProvider>
+      </ApprovalsProvider>
     </ExecutionProcessesProvider>
   );
 }

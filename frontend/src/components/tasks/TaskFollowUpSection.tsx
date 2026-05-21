@@ -35,6 +35,7 @@ import { cn } from '@/lib/utils';
 import { useReview } from '@/contexts/ReviewProvider';
 import { useClickedElements } from '@/contexts/ClickedElementsProvider';
 import { useEntries } from '@/contexts/EntriesContext';
+import { useApprovals } from '@/hooks/useApprovals';
 import { useKeySubmitFollowUp, Scope } from '@/keyboard';
 import { useHotkeysContext } from 'react-hotkeys-hook';
 import { useProject } from '@/contexts/ProjectContext';
@@ -333,7 +334,24 @@ export function TaskFollowUpSection({
 
   // Check if there's a pending approval - users shouldn't be able to type during approvals
   const { entries } = useEntries();
+  const { pendingApprovals } = useApprovals();
+  const runningProcessIds = useMemo(
+    () =>
+      new Set(
+        processes
+          .filter((p) => p.status === 'running')
+          .map((p) => p.id)
+      ),
+    [processes]
+  );
   const hasPendingApproval = useMemo(() => {
+    if (
+      pendingApprovals.some((a) =>
+        runningProcessIds.has(a.execution_process_id)
+      )
+    ) {
+      return true;
+    }
     return entries.some((entry) => {
       if (entry.type !== 'NORMALIZED_ENTRY') return false;
       const entryType = entry.content.entry_type;
@@ -342,7 +360,7 @@ export function TaskFollowUpSection({
         entryType.status.status === 'pending_approval'
       );
     });
-  }, [entries]);
+  }, [entries, pendingApprovals, runningProcessIds]);
 
   // Send follow-up action
   const { isSendingFollowUp, followUpError, setFollowUpError, onSendFollowUp } =

@@ -1,12 +1,17 @@
 import {
   forwardRef,
   useCallback,
+  useEffect,
+  useId,
   useImperativeHandle,
   useMemo,
   useState,
 } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { AskUserQuestionItem, QuestionAnswer } from 'shared/types';
-import { MessageCircleQuestion, Loader2 } from 'lucide-react';
+import { Check, Loader2, MessageCircleQuestion } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 
 export interface AskUserQuestionBannerHandle {
   submitCustomAnswer: (text: string) => void;
@@ -20,6 +25,89 @@ interface Props {
   error: string | null;
 }
 
+function toQuestionAnswers(
+  questions: AskUserQuestionItem[],
+  rec: Record<string, string[]>
+): QuestionAnswer[] {
+  return questions
+    .filter((q) => rec[q.question] !== undefined)
+    .map((q) => ({ question: q.question, answer: rec[q.question]! }));
+}
+
+function firstUnansweredIndex(
+  questions: AskUserQuestionItem[],
+  answers: Record<string, string[]>
+): number {
+  const idx = questions.findIndex((q) => answers[q.question] === undefined);
+  return idx === -1 ? questions.length : idx;
+}
+
+interface OptionButtonProps {
+  label: string;
+  description?: string;
+  selected: boolean;
+  multiSelect: boolean;
+  disabled: boolean;
+  onSelect: () => void;
+}
+
+function OptionButton({
+  label,
+  description,
+  selected,
+  multiSelect,
+  disabled,
+  onSelect,
+}: OptionButtonProps) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onSelect}
+      title={description}
+      aria-pressed={multiSelect ? selected : undefined}
+      className={cn(
+        'group w-full text-left rounded-md border px-3 py-2.5 transition-all',
+        'flex items-center gap-2.5',
+        selected
+          ? 'border-blue-400/70 bg-blue-50/80 dark:bg-blue-950/40 shadow-sm ring-1 ring-blue-400/25'
+          : 'border-border/70 bg-background/80 hover:border-blue-400/40 hover:bg-blue-50/40 dark:hover:bg-blue-950/20',
+        disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
+      )}
+    >
+      <span
+        className={cn(
+          'flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors',
+          multiSelect ? 'rounded-sm' : 'rounded-full',
+          selected
+            ? 'border-blue-500 bg-blue-500 text-white'
+            : 'border-muted-foreground/40 bg-background group-hover:border-blue-400/60'
+        )}
+        aria-hidden
+      >
+        {selected && <Check className="h-2.5 w-2.5 stroke-[3]" />}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span
+          className={cn(
+            'block text-sm font-medium leading-snug',
+            selected
+              ? 'text-blue-900 dark:text-blue-100'
+              : 'text-foreground'
+          )}
+        >
+          {label}
+        </span>
+        {description && (
+          <span className="mt-0.5 block text-sm leading-relaxed text-muted-foreground">
+            {description}
+          </span>
+        )}
+      </span>
+    </button>
+  );
+}
+
 const AskUserQuestionBanner = forwardRef<
   AskUserQuestionBannerHandle,
   Props
@@ -27,122 +115,97 @@ const AskUserQuestionBanner = forwardRef<
   { questions, onSubmitAnswers, isSubmitting, isTimedOut, error },
   ref
 ) {
+  const { t } = useTranslation('common');
+  const customInputId = useId();
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
   const [multiSelectLabels, setMultiSelectLabels] = useState<Set<string>>(
     new Set()
   );
   const [customText, setCustomText] = useState('');
 
-  const toQuestionAnswers = useCallback(
-    (rec: Record<string, string[]>): QuestionAnswer[] =>
-      questions
-        .filter((q) => rec[q.question] !== undefined)
-        .map((q) => ({ question: q.question, answer: rec[q.question] })),
+  const questionsKey = useMemo(
+    () => questions.map((q) => q.question).join('\0'),
     [questions]
   );
 
-  const currentIndex = useMemo(() => {
-    for (let i = 0; i < questions.length; i++) {
-      if (answers[questions[i].question] === undefined) return i;
-    }
-    return questions.length;
-  }, [questions, answers]);
+  useEffect(() => {
+    setAnswers({});
+    setMultiSelectLabels(new Set());
+    setCustomText('');
+  }, [questionsKey]);
+
+  const currentIndex = useMemo(
+    () => firstUnansweredIndex(questions, answers),
+    [questions, answers]
+  );
 
   const currentQuestion =
     currentIndex < questions.length ? questions[currentIndex] : null;
   const isAllAnswered = currentIndex >= questions.length;
+  const isLastQuestion = currentIndex === questions.length - 1;
   const disabled = isSubmitting || isTimedOut;
   const totalQuestions = questions.length;
 
-  const handleSelectOption = useCallback(
-    (label: string) => {
+  useEffect(() => {
+    setMultiSelectLabels(new Set());
+    setCustomText('');
+  }, [currentIndex]);
+
+  const commitAnswer = useCallback(
+    (labels: string[]) => {
       if (disabled || !currentQuestion) return;
 
-      if (currentQuestion.multiSelect) {
-        setMultiSelectLabels((prev) => {
-          const next = new Set(prev);
-          if (next.has(label)) {
-            next.delete(label);
-          } else {
-            next.add(label);
-          }
-          return next;
-        });
-      } else {
-        const newAnswers = {
-          ...answers,
-          [currentQuestion.question]: [label],
-        };
-        setAnswers(newAnswers);
-        setCustomText('');
+      const trimmed = labels.map((l) => l.trim()).filter(Boolean);
+      if (trimmed.length === 0) return;
 
-        if (currentIndex === totalQuestions - 1) {
-          onSubmitAnswers(toQuestionAnswers(newAnswers));
-        }
+      const newAnswers = {
+        ...answers,
+        [currentQuestion.question]: trimmed,
+      };
+      setAnswers(newAnswers);
+      setMultiSelectLabels(new Set());
+      setCustomText('');
+
+      if (isLastQuestion) {
+        onSubmitAnswers(toQuestionAnswers(questions, newAnswers));
       }
     },
     [
       disabled,
       currentQuestion,
       answers,
-      currentIndex,
-      totalQuestions,
+      isLastQuestion,
+      questions,
       onSubmitAnswers,
-      toQuestionAnswers,
     ]
   );
 
+  const handleSelectOption = useCallback(
+    (label: string) => {
+      if (!currentQuestion?.multiSelect) {
+        commitAnswer([label]);
+        return;
+      }
+      setMultiSelectLabels((prev) => {
+        const next = new Set(prev);
+        if (next.has(label)) {
+          next.delete(label);
+        } else {
+          next.add(label);
+        }
+        return next;
+      });
+    },
+    [currentQuestion, commitAnswer]
+  );
+
   const handleConfirmMultiSelect = useCallback(() => {
-    if (disabled || !currentQuestion) return;
-
-    const labels = Array.from(multiSelectLabels);
-    if (labels.length === 0) return;
-
-    const newAnswers = {
-      ...answers,
-      [currentQuestion.question]: labels,
-    };
-    setAnswers(newAnswers);
-    setMultiSelectLabels(new Set());
-    setCustomText('');
-
-    if (currentIndex === totalQuestions - 1) {
-      onSubmitAnswers(toQuestionAnswers(newAnswers));
-    }
-  }, [
-    disabled,
-    currentQuestion,
-    multiSelectLabels,
-    answers,
-    currentIndex,
-    totalQuestions,
-    onSubmitAnswers,
-    toQuestionAnswers,
-  ]);
+    commitAnswer(Array.from(multiSelectLabels));
+  }, [commitAnswer, multiSelectLabels]);
 
   const handleCustomSubmit = useCallback(() => {
-    if (disabled || !currentQuestion || !customText.trim()) return;
-
-    const newAnswers = {
-      ...answers,
-      [currentQuestion.question]: [customText.trim()],
-    };
-    setAnswers(newAnswers);
-    setCustomText('');
-
-    if (currentIndex === totalQuestions - 1) {
-      onSubmitAnswers(toQuestionAnswers(newAnswers));
-    }
-  }, [
-    disabled,
-    currentQuestion,
-    customText,
-    answers,
-    currentIndex,
-    totalQuestions,
-    onSubmitAnswers,
-    toQuestionAnswers,
-  ]);
+    commitAnswer([customText]);
+  }, [commitAnswer, customText]);
 
   const handleCustomKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -157,138 +220,147 @@ const AskUserQuestionBanner = forwardRef<
   useImperativeHandle(
     ref,
     () => ({
-      submitCustomAnswer: (text: string) => {
-        if (disabled || !currentQuestion || !text.trim()) return;
-        const newAnswers = {
-          ...answers,
-          [currentQuestion.question]: [text.trim()],
-        };
-        setAnswers(newAnswers);
-        if (currentIndex === totalQuestions - 1) {
-          onSubmitAnswers(toQuestionAnswers(newAnswers));
-        }
-      },
+      submitCustomAnswer: (text: string) => commitAnswer([text]),
     }),
-    [
-      disabled,
-      currentQuestion,
-      answers,
-      currentIndex,
-      totalQuestions,
-      onSubmitAnswers,
-      toQuestionAnswers,
-    ]
+    [commitAnswer]
   );
 
   if (isAllAnswered && !isSubmitting) return null;
 
   return (
-    <div className="border rounded-sm overflow-hidden">
-      <div className="flex items-center gap-1.5 px-3 py-2 bg-muted/30 border-b">
-        <MessageCircleQuestion className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-        <span className="text-sm">
-          Ask User Question
-          {totalQuestions > 1 && (
-            <span className="text-muted-foreground ml-1">
-              ({Math.min(currentIndex + 1, totalQuestions)}/{totalQuestions})
-            </span>
-          )}
+    <div
+      className={cn(
+        'overflow-hidden rounded-md border border-blue-400/30 text-sm shadow-sm',
+        'border-l-4 border-l-blue-400',
+        'bg-blue-50/40 dark:bg-blue-950/15'
+      )}
+    >
+      <div className="flex items-center gap-2.5 border-b border-blue-200/40 px-3 py-2.5 dark:border-blue-800/40">
+        <span
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-100 dark:bg-blue-900/50"
+          aria-hidden
+        >
+          <MessageCircleQuestion className="h-3.5 w-3.5 text-blue-600 dark:text-blue-300" />
         </span>
+        <span className="min-w-0 flex-1 font-medium text-blue-900 dark:text-blue-100">
+          {t('conversation.question.askUser.title')}
+        </span>
+        {totalQuestions > 1 && (
+          <span className="shrink-0 rounded-full bg-blue-100/90 px-2 py-0.5 text-sm font-medium tabular-nums text-blue-700 dark:bg-blue-900/60 dark:text-blue-200">
+            {t('conversation.question.askUser.progress', {
+              current: Math.min(currentIndex + 1, totalQuestions),
+              total: totalQuestions,
+            })}
+          </span>
+        )}
       </div>
 
+      {isTimedOut && (
+        <div className="border-b border-amber-200/50 bg-amber-50/80 px-3 py-2 text-amber-800 dark:border-amber-800/40 dark:bg-amber-950/25 dark:text-amber-200">
+          {t('conversation.question.timedOut')}
+        </div>
+      )}
+
       {currentQuestion && (
-        <div className="px-3 py-2">
-          <div className="flex items-center gap-1.5 mb-2">
-            <span className="text-xs font-medium text-muted-foreground bg-muted px-1.5 py-0.5 rounded-sm">
+        <div className="px-3 py-2.5" role="group" aria-live="polite">
+          <div className="mb-2 flex flex-wrap items-center gap-1.5">
+            <span className="rounded border border-blue-200/60 bg-background/60 px-2 py-0.5 text-sm font-medium text-blue-800 dark:border-blue-800/50 dark:text-blue-200">
               {currentQuestion.header}
             </span>
             {currentQuestion.multiSelect && (
-              <span className="text-xs text-muted-foreground">
-                Select multiple
+              <span className="text-sm text-muted-foreground">
+                {t('conversation.question.askUser.multiSelect')}
               </span>
             )}
           </div>
-          <p className="text-sm font-medium mb-2">{currentQuestion.question}</p>
+          <p className="mb-2 font-medium leading-snug text-foreground">
+            {currentQuestion.question}
+          </p>
 
-          <div className="flex flex-wrap gap-1.5">
-            {currentQuestion.options.map((opt) => {
-              const isSelected =
-                currentQuestion.multiSelect &&
-                multiSelectLabels.has(opt.label);
-              return (
-                <button
-                  key={opt.label}
-                  type="button"
-                  disabled={disabled}
-                  onClick={() => handleSelectOption(opt.label)}
-                  title={opt.description}
-                  className={[
-                    'rounded-md border px-2.5 py-1.5 text-xs transition-all',
-                    isSelected
-                      ? 'border-primary bg-primary/10 text-primary'
-                      : 'border-border text-muted-foreground hover:border-primary/40 hover:text-foreground hover:bg-accent',
-                    disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer',
-                  ].join(' ')}
-                >
-                  <span className="font-medium">{opt.label}</span>
-                  {opt.description && (
-                    <span className="text-muted-foreground ml-1.5 text-xs">
-                      {opt.description}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
+          <div className="flex flex-col gap-2">
+            {currentQuestion.options.map((opt, idx) => (
+              <OptionButton
+                key={`${opt.label}-${idx}`}
+                label={opt.label}
+                description={opt.description}
+                selected={
+                  currentQuestion.multiSelect
+                    ? multiSelectLabels.has(opt.label)
+                    : false
+                }
+                multiSelect={currentQuestion.multiSelect}
+                disabled={disabled}
+                onSelect={() => handleSelectOption(opt.label)}
+              />
+            ))}
           </div>
 
           {currentQuestion.multiSelect && multiSelectLabels.size > 0 && (
-            <button
+            <Button
               type="button"
+              size="sm"
               disabled={disabled}
               onClick={handleConfirmMultiSelect}
-              className="mt-2 rounded-md bg-primary px-3 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+              className="mt-2.5"
             >
-              Confirm selection
-            </button>
+              {t('conversation.question.askUser.confirmSelection')}
+            </Button>
           )}
 
-          <div className="mt-3 flex items-center gap-1.5">
-            <span className="text-xs text-muted-foreground shrink-0">
-              Other:
-            </span>
-            <input
-              type="text"
-              value={customText}
-              onChange={(e) => setCustomText(e.target.value)}
-              onKeyDown={handleCustomKeyDown}
-              disabled={disabled}
-              placeholder="Type a custom answer and press Enter..."
-              className="flex-1 min-w-0 border rounded-sm px-2 py-1 text-xs bg-background focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50"
-            />
-            {customText.trim() && (
-              <button
-                type="button"
+          <div className="mt-3 border-t border-blue-200/40 pt-2 dark:border-blue-800/40">
+            <label
+              htmlFor={customInputId}
+              className="mb-1.5 block font-medium text-muted-foreground"
+            >
+              {t('conversation.question.askUser.other')}
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                id={customInputId}
+                type="text"
+                value={customText}
+                onChange={(e) => setCustomText(e.target.value)}
+                onKeyDown={handleCustomKeyDown}
                 disabled={disabled}
-                onClick={handleCustomSubmit}
-                className="rounded-sm bg-primary px-2 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-              >
-                Submit
-              </button>
-            )}
+                placeholder={t(
+                  'conversation.question.askUser.customPlaceholder'
+                )}
+                className={cn(
+                  'min-w-0 flex-1 rounded-md border border-input/80 bg-background px-2.5 py-1.5',
+                  'placeholder:text-muted-foreground/70',
+                  'focus:outline-none focus:ring-1 focus:ring-blue-400/30 focus:border-blue-400/50',
+                  'disabled:cursor-not-allowed disabled:opacity-50'
+                )}
+              />
+              {customText.trim() && (
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={disabled}
+                  onClick={handleCustomSubmit}
+                  className="shrink-0"
+                >
+                  {t('conversation.question.askUser.submit')}
+                </Button>
+              )}
+            </div>
           </div>
         </div>
       )}
 
       {error && (
-        <div className="px-3 py-2 text-xs text-destructive border-t">
+        <div
+          className="border-t border-destructive/20 bg-destructive/5 px-3 py-2 text-destructive"
+          role="alert"
+        >
           {error}
         </div>
       )}
 
       {isSubmitting && (
-        <div className="px-3 py-2 text-xs text-muted-foreground border-t flex items-center gap-1.5">
-          <Loader2 className="h-3 w-3 animate-spin" />
-          Submitting...
+        <div className="flex items-center gap-2 border-t border-blue-200/40 px-3 py-2.5 text-muted-foreground dark:border-blue-800/40">
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-600 dark:text-blue-400" aria-hidden />
+          {t('conversation.question.askUser.submitting')}
         </div>
       )}
     </div>

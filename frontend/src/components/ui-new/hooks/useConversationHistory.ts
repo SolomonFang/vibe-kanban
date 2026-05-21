@@ -10,7 +10,10 @@ import {
 import { useExecutionProcessesContext } from '@/contexts/ExecutionProcessesContext';
 import { useEntries } from '@/contexts/EntriesContext';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { streamJsonPatchEntries } from '@/utils/streamJsonPatchEntries';
+import {
+  extractTokenUsageFromEntries,
+  streamJsonPatchEntries,
+} from '@/utils/streamJsonPatchEntries';
 import type {
   AddEntryType,
   ExecutionProcessStateStore,
@@ -31,7 +34,6 @@ export interface UseConversationHistoryResult {
 import {
   makeLoadingPatch,
   MIN_INITIAL_ENTRIES,
-  nextActionPatch,
   REMAINING_BATCH_SIZE,
 } from '@/hooks/useConversationHistory/constants';
 
@@ -69,6 +71,7 @@ export const useConversationHistory = ({
   const previousStatusMapRef = useRef<Map<string, ExecutionProcessStatus>>(
     new Map()
   );
+  const latestTokenUsageRef = useRef<TokenUsageInfo | null>(null);
 
   // Track whether scripts have run in this conversation
   const [hasSetupScriptRun, setHasSetupScriptRun] = useState(false);
@@ -96,6 +99,19 @@ export const useConversationHistory = ({
     );
   }, [executionProcessesRaw]);
 
+  // Reset displayed state when workspace changes (must run before load/stream effects)
+  useEffect(() => {
+    displayedExecutionProcesses.current = {};
+    loadedInitialEntries.current = false;
+    latestTokenUsageRef.current = null;
+    streamingProcessIdsRef.current.clear();
+    previousStatusMapRef.current.clear();
+    setHasSetupScriptRun(false);
+    setHasCleanupScriptRun(false);
+    setHasRunningProcess(false);
+    // Do not emit here — empty state would only produce a non-renderable next_action row
+  }, [attempt.id]);
+
   const loadEntriesForHistoricExecutionProcess = (
     executionProcess: ExecutionProcess
   ) => {
@@ -108,6 +124,10 @@ export const useConversationHistory = ({
 
     return new Promise<PatchType[]>((resolve) => {
       const controller = streamJsonPatchEntries<PatchType>(url, {
+        onTokenUsage: (info) => {
+          latestTokenUsageRef.current = info;
+          setTokenUsageInfo(info);
+        },
         onFinished: (allEntries) => {
           controller.close();
           resolve(allEntries);
@@ -178,12 +198,7 @@ export const useConversationHistory = ({
 
   const flattenEntriesForEmit = useCallback(
     (executionProcessState: ExecutionProcessStateStore): PatchTypeWithKey[] => {
-      // Flags to control Next Action bar emit
-      let hasPendingApproval = false;
       let hasRunningProcess = false;
-      let lastProcessFailedOrKilled = false;
-      let needsSetup = false;
-      let setupHelpText: string | undefined;
       let latestTokenUsageInfo: TokenUsageInfo | null = null;
 
       // Create user messages + tool calls for setup/cleanup scripts
@@ -197,7 +212,7 @@ export const useConversationHistory = ({
               b.executionProcess.created_at as unknown as string
             ).getTime()
         )
-        .flatMap((p, index) => {
+        .flatMap((p) => {
           const entries: PatchTypeWithKey[] = [];
           if (
             p.executionProcess.executor_action.typ.type ===
@@ -227,14 +242,25 @@ export const useConversationHistory = ({
             entries.push(userPatchTypeWithKey);
 
             // Extract latest token usage info before filtering
-            const tokenUsageEntry = p.entries.findLast(
-              (e) =>
-                e.type === 'NORMALIZED_ENTRY' &&
+            let tokenUsageEntry: PatchTypeWithKey | undefined;
+            for (let i = p.entries.length - 1; i >= 0; i--) {
+              const e = p.entries[i];
+              if (
+                e?.type === 'NORMALIZED_ENTRY' &&
                 e.content.entry_type.type === 'token_usage_info'
-            );
+              ) {
+                tokenUsageEntry = e;
+                break;
+              }
+            }
             if (tokenUsageEntry?.type === 'NORMALIZED_ENTRY') {
-              latestTokenUsageInfo = tokenUsageEntry.content
-                .entry_type as TokenUsageInfo;
+              const et = tokenUsageEntry.content.entry_type;
+              if (et.type === 'token_usage_info') {
+                latestTokenUsageInfo = {
+                  total_tokens: et.total_tokens,
+                  model_context_window: et.model_context_window,
+                };
+              }
             }
 
             // Remove user messages (replaced with custom one) and token usage info (displayed separately)
@@ -245,21 +271,6 @@ export const useConversationHistory = ({
                   e.content.entry_type.type !== 'token_usage_info')
             );
 
-            const hasPendingApprovalEntry = entriesExcludingUser.some(
-              (entry) => {
-                if (entry.type !== 'NORMALIZED_ENTRY') return false;
-                const entryType = entry.content.entry_type;
-                return (
-                  entryType.type === 'tool_use' &&
-                  entryType.status.status === 'pending_approval'
-                );
-              }
-            );
-
-            if (hasPendingApprovalEntry) {
-              hasPendingApproval = true;
-            }
-
             entries.push(...entriesExcludingUser);
 
             const liveProcessStatus = getLiveExecutionProcess(
@@ -267,39 +278,8 @@ export const useConversationHistory = ({
             )?.status;
             const isProcessRunning =
               liveProcessStatus === ExecutionProcessStatus.running;
-            const processFailedOrKilled =
-              liveProcessStatus === ExecutionProcessStatus.failed ||
-              liveProcessStatus === ExecutionProcessStatus.killed;
-
             if (isProcessRunning) {
               hasRunningProcess = true;
-            }
-
-            if (
-              processFailedOrKilled &&
-              index === Object.keys(executionProcessState).length - 1
-            ) {
-              lastProcessFailedOrKilled = true;
-
-              // Check if this failed process has a SetupRequired entry
-              const hasSetupRequired = entriesExcludingUser.some((entry) => {
-                if (entry.type !== 'NORMALIZED_ENTRY') return false;
-                if (
-                  entry.content.entry_type.type === 'error_message' &&
-                  entry.content.entry_type.error_type.type === 'setup_required'
-                ) {
-                  setupHelpText = entry.content.content;
-                  return true;
-                }
-                return false;
-              });
-
-              if (hasSetupRequired) {
-                needsSetup = true;
-              }
-            }
-
-            if (isProcessRunning && !hasPendingApprovalEntry) {
               entries.push(makeLoadingPatch(p.executionProcess.id));
             }
           } else if (
@@ -339,14 +319,6 @@ export const useConversationHistory = ({
 
             if (executionProcess?.status === ExecutionProcessStatus.running) {
               hasRunningProcess = true;
-            }
-
-            if (
-              (executionProcess?.status === ExecutionProcessStatus.failed ||
-                executionProcess?.status === ExecutionProcessStatus.killed) &&
-              index === Object.keys(executionProcessState).length - 1
-            ) {
-              lastProcessFailedOrKilled = true;
             }
 
             const exitCode = Number(executionProcess?.exit_code) || 0;
@@ -403,20 +375,15 @@ export const useConversationHistory = ({
       // Update running process state
       setHasRunningProcess(hasRunningProcess);
 
-      // Emit the next action bar if no process running
-      if (!hasRunningProcess && !hasPendingApproval) {
-        allEntries.push(
-          nextActionPatch(
-            lastProcessFailedOrKilled,
-            Object.keys(executionProcessState).length,
-            needsSetup,
-            setupHelpText
-          )
-        );
-      }
+      // next_action is not rendered in the new UI (NewDisplayConversationEntry returns null)
 
-      // Update token usage info in context
-      setTokenUsageInfo(latestTokenUsageInfo);
+      // Keep the latest known token usage; do not clear when entries lack it yet
+      if (latestTokenUsageInfo !== null) {
+        latestTokenUsageRef.current = latestTokenUsageInfo;
+      }
+      if (latestTokenUsageRef.current !== null) {
+        setTokenUsageInfo(latestTokenUsageRef.current);
+      }
 
       return allEntries;
     },
@@ -444,7 +411,21 @@ export const useConversationHistory = ({
         }
       }
 
-      onEntriesUpdatedRef.current?.(entries, modifiedAddEntryType, loading);
+      const tokenUsage =
+        latestTokenUsageRef.current ??
+        extractTokenUsageFromEntries(
+          Object.values(executionProcessState).flatMap((p) => p.entries)
+        );
+      if (tokenUsage) {
+        latestTokenUsageRef.current = tokenUsage;
+      }
+
+      onEntriesUpdatedRef.current?.(
+        entries,
+        modifiedAddEntryType,
+        loading,
+        tokenUsage
+      );
     },
     [flattenEntriesForEmit]
   );
@@ -460,10 +441,25 @@ export const useConversationHistory = ({
           url = `/api/execution-processes/${executionProcess.id}/normalized-logs/ws`;
         }
         const controller = streamJsonPatchEntries<PatchType>(url, {
+          onTokenUsage: (info) => {
+            latestTokenUsageRef.current = info;
+            setTokenUsageInfo(info);
+          },
           onEntries(entries) {
-            const patchesWithKey = entries.map((entry, index) =>
-              patchWithKey(entry, executionProcess.id, index)
-            );
+            const tokenFromSnapshot = extractTokenUsageFromEntries(entries);
+            if (tokenFromSnapshot) {
+              latestTokenUsageRef.current = tokenFromSnapshot;
+              setTokenUsageInfo(tokenFromSnapshot);
+            }
+
+            const patchesWithKey: PatchTypeWithKey[] = [];
+            entries.forEach((entry, index) => {
+              if (entry != null) {
+                patchesWithKey.push(
+                  patchWithKey(entry, executionProcess.id, index)
+                );
+              }
+            });
             mergeIntoDisplayed((state) => {
               state[executionProcess.id] = {
                 executionProcess,
@@ -477,14 +473,18 @@ export const useConversationHistory = ({
             controller.close();
             resolve();
           },
-          onError: () => {
+          onError: (err) => {
+            console.warn(
+              `normalized-logs stream error for process ${executionProcess.id}:`,
+              err
+            );
             controller.close();
-            reject();
+            reject(err);
           },
         });
       });
     },
-    [emitEntries]
+    [emitEntries, setTokenUsageInfo]
   );
 
   // Sometimes it can take a few seconds for the stream to start, wrap the loadRunningAndEmit method
@@ -763,18 +763,6 @@ export const useConversationHistory = ({
       });
     }
   }, [attempt.id, idListKey, executionProcessesRaw]);
-
-  useEffect(() => {
-    displayedExecutionProcesses.current = {};
-    loadedInitialEntries.current = false;
-    streamingProcessIdsRef.current.clear();
-    previousStatusMapRef.current.clear();
-    // Reset script run status when attempt changes
-    setHasSetupScriptRun(false);
-    setHasCleanupScriptRun(false);
-    setHasRunningProcess(false);
-    emitEntries(displayedExecutionProcesses.current, 'initial', true);
-  }, [attempt.id, emitEntries]);
 
   return {
     hasSetupScriptRun,

@@ -16,7 +16,6 @@ import {
   useState,
 } from 'react';
 
-import { cn } from '@/lib/utils';
 import NewDisplayConversationEntry from './NewDisplayConversationEntry';
 import { ApprovalFormProvider } from '@/contexts/ApprovalFormContext';
 import { useEntries } from '@/contexts/EntriesContext';
@@ -34,6 +33,8 @@ import {
   useConversationHistory,
 } from '@/components/ui-new/hooks/useConversationHistory';
 import { aggregateConsecutiveEntries } from '@/utils/aggregateEntries';
+import { extractTokenUsageFromEntries } from '@/utils/streamJsonPatchEntries';
+import type { TokenUsageInfo } from 'shared/types';
 import type { WorkspaceWithSession } from '@/types/attempt';
 import type { RepoWithTargetBranch } from 'shared/types';
 import { useWorkspaceContext } from '@/contexts/WorkspaceContext';
@@ -70,6 +71,17 @@ const AutoScrollToBottom: ScrollModifier = {
   type: 'auto-scroll-to-bottom',
   autoScroll: 'smooth',
 };
+
+/** Entries that NewDisplayConversationEntry intentionally does not render. */
+function filterRenderableEntries(
+  entries: PatchTypeWithKey[]
+): PatchTypeWithKey[] {
+  return entries.filter((entry) => {
+    if (entry.type !== 'NORMALIZED_ENTRY') return true;
+    const entryType = entry.content.entry_type.type;
+    return entryType !== 'next_action' && entryType !== 'token_usage_info';
+  });
+}
 
 const ScrollToTopOfLastItem: ScrollModifier = {
   type: 'item-location',
@@ -171,13 +183,46 @@ export const ConversationList = forwardRef<
   const [channelData, setChannelData] =
     useState<DataWithScrollModifier<DisplayEntry> | null>(null);
   const [loading, setLoading] = useState(true);
-  const { setEntries, reset } = useEntries();
+  const { setEntries, reset, setTokenUsageInfo } = useEntries();
   const pendingUpdateRef = useRef<{
     entries: PatchTypeWithKey[];
     addType: AddEntryType;
     loading: boolean;
+    tokenUsage?: TokenUsageInfo | null;
   } | null>(null);
-  const debounceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // rAF throttle: 100ms debounce never fires during continuous streaming because
+  // each WS patch resets the timer (~16ms with upstream-style rAF batching).
+  const rafIdRef = useRef<number | null>(null);
+  const loadingRef = useRef(loading);
+  loadingRef.current = loading;
+
+  const applyPendingUpdate = useCallback(() => {
+    rafIdRef.current = null;
+    const pending = pendingUpdateRef.current;
+    if (!pending) return;
+
+    let scrollModifier: ScrollModifier = InitialDataScrollModifier;
+
+    if (pending.addType === 'plan' && !loadingRef.current) {
+      scrollModifier = ScrollToTopOfLastItem;
+    } else if (pending.addType === 'running' && !loadingRef.current) {
+      scrollModifier = AutoScrollToBottom;
+    }
+
+    const renderableEntries = filterRenderableEntries(pending.entries);
+    const aggregatedEntries = aggregateConsecutiveEntries(renderableEntries);
+
+    setChannelData({ data: aggregatedEntries, scrollModifier });
+    setEntries(renderableEntries);
+
+    const tokenUsage =
+      pending.tokenUsage ?? extractTokenUsageFromEntries(pending.entries);
+    if (tokenUsage) {
+      setTokenUsageInfo(tokenUsage);
+    }
+
+    setLoading(pending.loading);
+  }, [setEntries, setTokenUsageInfo]);
 
   // Get repos from workspace context to check if scripts are configured
   let repos: RepoWithTargetBranch[] = [];
@@ -225,6 +270,11 @@ export const ConversationList = forwardRef<
   const canConfigure = repos.length > 0;
 
   useEffect(() => {
+    if (rafIdRef.current !== null) {
+      cancelAnimationFrame(rafIdRef.current);
+      rafIdRef.current = null;
+    }
+    pendingUpdateRef.current = null;
     setLoading(true);
     setChannelData(null);
     reset();
@@ -232,49 +282,32 @@ export const ConversationList = forwardRef<
 
   useEffect(() => {
     return () => {
-      if (debounceTimeoutRef.current) {
-        clearTimeout(debounceTimeoutRef.current);
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current);
       }
     };
   }, []);
 
-  const onEntriesUpdated = (
-    newEntries: PatchTypeWithKey[],
-    addType: AddEntryType,
-    newLoading: boolean
-  ) => {
-    pendingUpdateRef.current = {
-      entries: newEntries,
-      addType,
-      loading: newLoading,
-    };
+  const onEntriesUpdated = useCallback(
+    (
+      newEntries: PatchTypeWithKey[],
+      addType: AddEntryType,
+      newLoading: boolean,
+      tokenUsage?: TokenUsageInfo | null
+    ) => {
+      pendingUpdateRef.current = {
+        entries: newEntries,
+        addType,
+        loading: newLoading,
+        tokenUsage,
+      };
 
-    if (debounceTimeoutRef.current) {
-      clearTimeout(debounceTimeoutRef.current);
-    }
-
-    debounceTimeoutRef.current = setTimeout(() => {
-      const pending = pendingUpdateRef.current;
-      if (!pending) return;
-
-      let scrollModifier: ScrollModifier = InitialDataScrollModifier;
-
-      if (pending.addType === 'plan' && !loading) {
-        scrollModifier = ScrollToTopOfLastItem;
-      } else if (pending.addType === 'running' && !loading) {
-        scrollModifier = AutoScrollToBottom;
+      if (rafIdRef.current === null) {
+        rafIdRef.current = requestAnimationFrame(applyPendingUpdate);
       }
-
-      const aggregatedEntries = aggregateConsecutiveEntries(pending.entries);
-
-      setChannelData({ data: aggregatedEntries, scrollModifier });
-      setEntries(pending.entries);
-
-      if (loading) {
-        setLoading(pending.loading);
-      }
-    }, 100);
-  };
+    },
+    [applyPendingUpdate]
+  );
 
   const { hasSetupScriptRun, hasCleanupScriptRun, hasRunningProcess } =
     useConversationHistory({ attempt, onEntriesUpdated });
@@ -367,17 +400,19 @@ export const ConversationList = forwardRef<
     [channelData]
   );
 
-  // Determine if content is ready to show (has data or finished loading)
-  const hasContent = !loading || (channelData?.data?.length ?? 0) > 0;
+  const showEmptyState =
+    !loading && (channelData?.data?.length ?? 0) === 0;
 
   return (
     <ApprovalFormProvider>
-      <div
-        className={cn(
-          'h-full transition-opacity duration-300',
-          hasContent ? 'opacity-100' : 'opacity-0'
-        )}
-      >
+      <div className="h-full">
+        {showEmptyState ? (
+          <div className="h-full flex items-center justify-center px-double">
+            <p className="text-sm text-low text-center">
+              No messages yet. Send a prompt to start the conversation.
+            </p>
+          </div>
+        ) : (
         <VirtuosoMessageListLicense
           licenseKey={import.meta.env.VITE_PUBLIC_REACT_VIRTUOSO_LICENSE_KEY}
         >
@@ -415,6 +450,7 @@ export const ConversationList = forwardRef<
             )}
           />
         </VirtuosoMessageListLicense>
+        )}
       </div>
     </ApprovalFormProvider>
   );

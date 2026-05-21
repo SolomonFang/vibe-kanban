@@ -13,7 +13,8 @@
       },
       "OPUS": {
         "CLAUDE_CODE": {
-          "model": "opus"
+          "model": "opus",
+          "dangerously_skip_permissions": true
         }
       },
       "APPROVALS": {

@@ -6,7 +6,7 @@ import {
   VirtuosoMessageListMethods,
   VirtuosoMessageListProps,
 } from '@virtuoso.dev/message-list';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import DisplayConversationEntry from '../NormalizedConversation/DisplayConversationEntry';
 import { useEntries } from '@/contexts/EntriesContext';
@@ -16,7 +16,7 @@ import {
   useConversationHistory,
 } from '@/hooks/useConversationHistory';
 import { Loader2 } from 'lucide-react';
-import { TaskWithAttemptStatus } from 'shared/types';
+import { TaskWithAttemptStatus, type TokenUsageInfo } from 'shared/types';
 import type { WorkspaceWithSession } from '@/types/attempt';
 import { ApprovalFormProvider } from '@/contexts/ApprovalFormContext';
 
@@ -76,36 +76,93 @@ const computeItemKey: VirtuosoMessageListProps<
   MessageListContext
 >['computeItemKey'] = ({ data }) => `l-${data.patchKey}`;
 
+/** Entries that DisplayConversationEntry does not render (null rows). */
+function filterRenderableEntries(
+  entries: PatchTypeWithKey[]
+): PatchTypeWithKey[] {
+  return entries.filter((entry) => {
+    if (entry == null) return false;
+    if (entry.type !== 'NORMALIZED_ENTRY') return true;
+    return entry.content.entry_type.type !== 'token_usage_info';
+  });
+}
+
 const VirtualizedList = ({ attempt, task }: VirtualizedListProps) => {
   const [channelData, setChannelData] =
     useState<DataWithScrollModifier<PatchTypeWithKey> | null>(null);
   const [loading, setLoading] = useState(true);
-  const { setEntries, reset } = useEntries();
+  const { setEntries, reset, setTokenUsageInfo } = useEntries();
+  const pendingUpdateRef = useRef<{
+    entries: PatchTypeWithKey[];
+    addType: AddEntryType;
+    loading: boolean;
+  } | null>(null);
+  const rafIdRef = useRef<number | null>(null);
+  const loadingRef = useRef(loading);
+  loadingRef.current = loading;
+
+  const applyPendingUpdate = useCallback(() => {
+    rafIdRef.current = null;
+    const pending = pendingUpdateRef.current;
+    if (!pending) return;
+
+    let scrollModifier: ScrollModifier = InitialDataScrollModifier;
+
+    if (
+      (pending.addType === 'running' || pending.addType === 'plan') &&
+      !loadingRef.current
+    ) {
+      scrollModifier = AutoScrollToBottom;
+    }
+
+    const renderableEntries = filterRenderableEntries(pending.entries);
+    setChannelData({ data: renderableEntries, scrollModifier });
+    setEntries(renderableEntries);
+    setLoading(pending.loading);
+  }, [setEntries]);
 
   useEffect(() => {
+    if (rafIdRef.current !== null) {
+      cancelAnimationFrame(rafIdRef.current);
+      rafIdRef.current = null;
+    }
+    pendingUpdateRef.current = null;
     setLoading(true);
     setChannelData(null);
     reset();
   }, [attempt.id, reset]);
 
-  const onEntriesUpdated = (
-    newEntries: PatchTypeWithKey[],
-    addType: AddEntryType,
-    newLoading: boolean
-  ) => {
-    let scrollModifier: ScrollModifier = InitialDataScrollModifier;
+  useEffect(() => {
+    return () => {
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current);
+      }
+    };
+  }, []);
 
-    if ((addType === 'running' || addType === 'plan') && !loading) {
-      scrollModifier = AutoScrollToBottom;
-    }
+  const onEntriesUpdated = useCallback(
+    (
+      newEntries: PatchTypeWithKey[],
+      addType: AddEntryType,
+      newLoading: boolean,
+      tokenUsage?: TokenUsageInfo | null
+    ) => {
+      if (tokenUsage) {
+        setTokenUsageInfo(tokenUsage);
+      }
 
-    setChannelData({ data: newEntries, scrollModifier });
-    setEntries(newEntries);
+      pendingUpdateRef.current = {
+        entries: newEntries,
+        addType,
+        loading: newLoading,
+      };
 
-    if (loading) {
-      setLoading(newLoading);
-    }
-  };
+      if (rafIdRef.current === null) {
+        rafIdRef.current = requestAnimationFrame(applyPendingUpdate);
+      }
+    },
+    [applyPendingUpdate, setTokenUsageInfo]
+  );
 
   useConversationHistory({ attempt, onEntriesUpdated });
 
@@ -117,27 +174,29 @@ const VirtualizedList = ({ attempt, task }: VirtualizedListProps) => {
 
   return (
     <ApprovalFormProvider>
-      <VirtuosoMessageListLicense
-        licenseKey={import.meta.env.VITE_PUBLIC_REACT_VIRTUOSO_LICENSE_KEY}
-      >
-        <VirtuosoMessageList<PatchTypeWithKey, MessageListContext>
-          ref={messageListRef}
-          className="flex-1"
-          data={channelData}
-          initialLocation={INITIAL_TOP_ITEM}
-          context={messageListContext}
-          computeItemKey={computeItemKey}
-          ItemContent={ItemContent}
-          Header={() => <div className="h-2"></div>}
-          Footer={() => <div className="h-2"></div>}
-        />
-      </VirtuosoMessageListLicense>
-      {loading && (
-        <div className="float-left top-0 left-0 w-full h-full bg-primary flex flex-col gap-2 justify-center items-center">
-          <Loader2 className="h-8 w-8 animate-spin" />
-          <p>Loading History</p>
-        </div>
-      )}
+      <div className="relative flex flex-1 min-h-0 flex-col">
+        <VirtuosoMessageListLicense
+          licenseKey={import.meta.env.VITE_PUBLIC_REACT_VIRTUOSO_LICENSE_KEY}
+        >
+          <VirtuosoMessageList<PatchTypeWithKey, MessageListContext>
+            ref={messageListRef}
+            className="flex-1 min-h-0"
+            data={channelData}
+            initialLocation={INITIAL_TOP_ITEM}
+            context={messageListContext}
+            computeItemKey={computeItemKey}
+            ItemContent={ItemContent}
+            Header={() => <div className="h-2"></div>}
+            Footer={() => <div className="h-2"></div>}
+          />
+        </VirtuosoMessageListLicense>
+        {loading && (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-primary">
+            <Loader2 className="h-8 w-8 animate-spin" />
+            <p>Loading History</p>
+          </div>
+        )}
+      </div>
     </ApprovalFormProvider>
   );
 };

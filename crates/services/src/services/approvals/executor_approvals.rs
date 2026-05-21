@@ -1,22 +1,27 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use db::{self, DBService, models::execution_process::ExecutionProcess};
 use executors::approvals::{ExecutorApprovalError, ExecutorApprovalService};
-use serde_json::Value;
+use futures::future::{BoxFuture, Shared};
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use utils::approvals::{
-    ApprovalRequest, ApprovalStatus, CreateApprovalRequest, QuestionStatus,
+    ApprovalOutcome, ApprovalRequest, ApprovalStatus, QuestionStatus,
 };
 use uuid::Uuid;
 
 use crate::services::{approvals::Approvals, notification::NotificationService};
+
+type ApprovalWaiter = Shared<BoxFuture<'static, ApprovalOutcome>>;
 
 pub struct ExecutorApprovalBridge {
     approvals: Approvals,
     db: DBService,
     notification_service: NotificationService,
     execution_process_id: Uuid,
+    /// Waiters stored between create and wait phases, keyed by approval_id.
+    waiters: Mutex<HashMap<String, ApprovalWaiter>>,
 }
 
 impl ExecutorApprovalBridge {
@@ -31,120 +36,143 @@ impl ExecutorApprovalBridge {
             db,
             notification_service,
             execution_process_id,
+            waiters: Mutex::new(HashMap::new()),
         })
     }
-}
 
-#[async_trait]
-impl ExecutorApprovalService for ExecutorApprovalBridge {
-    async fn request_tool_approval(
+    async fn create_internal(
         &self,
         tool_name: &str,
-        tool_input: Value,
-        tool_call_id: &str,
-        cancel: CancellationToken,
-    ) -> Result<ApprovalStatus, ExecutorApprovalError> {
+        is_question: bool,
+        question_count: Option<usize>,
+    ) -> Result<String, ExecutorApprovalError> {
         super::ensure_task_in_review(&self.db.pool, self.execution_process_id).await;
 
-        let request = ApprovalRequest::from_create(
-            CreateApprovalRequest {
-                tool_name: tool_name.to_string(),
-                tool_input,
-                tool_call_id: tool_call_id.to_string(),
-            },
+        let request = ApprovalRequest::new(
+            tool_name.to_string(),
             self.execution_process_id,
         );
 
         let (request, waiter) = self
             .approvals
-            .create_with_waiter(request)
+            .create_with_waiter(request, is_question)
             .await
             .map_err(ExecutorApprovalError::request_failed)?;
 
         let approval_id = request.id.clone();
+
+        self.waiters
+            .lock()
+            .await
+            .insert(approval_id.clone(), waiter);
 
         let task_name = ExecutionProcess::load_context(&self.db.pool, self.execution_process_id)
             .await
             .map(|ctx| ctx.task.title)
             .unwrap_or_else(|_| "Unknown task".to_string());
 
-        self.notification_service
-            .notify(
-                &format!("Approval Needed: {}", task_name),
-                &format!("Tool '{}' requires approval", tool_name),
+        let (title, message) = if let Some(count) = question_count {
+            if count == 1 {
+                (
+                    format!("Question Asked: {}", task_name),
+                    "1 question requires an answer".to_string(),
+                )
+            } else {
+                (
+                    format!("Question Asked: {}", task_name),
+                    format!("{} questions require answers", count),
+                )
+            }
+        } else {
+            (
+                format!("Approval Needed: {}", task_name),
+                format!("Tool '{}' requires approval", tool_name),
             )
+        };
+
+        self.notification_service
+            .notify(&title, &message)
             .await;
 
-        let status = tokio::select! {
-            _ = cancel.cancelled() => {
-                tracing::info!("Approval request cancelled for tool_call_id={}", tool_call_id);
-                self.approvals.cancel(&approval_id).await;
-                return Err(ExecutorApprovalError::Cancelled);
-            }
-            status = waiter.clone() => status,
-        };
-
-        if matches!(status, ApprovalStatus::Pending) {
-            return Err(ExecutorApprovalError::request_failed(
-                "approval finished in pending state",
-            ));
-        }
-
-        Ok(status)
+        Ok(approval_id)
     }
 
-    async fn request_question_answer(
+    async fn wait_internal(
         &self,
-        tool_name: &str,
-        tool_input: Value,
-        tool_call_id: &str,
-        _question_count: usize,
+        approval_id: &str,
         cancel: CancellationToken,
-    ) -> Result<QuestionStatus, ExecutorApprovalError> {
-        // Create an approval request so the frontend shows pending UI
-        let request = ApprovalRequest::from_create(
-            CreateApprovalRequest {
-                tool_name: tool_name.to_string(),
-                tool_input,
-                tool_call_id: tool_call_id.to_string(),
-            },
-            self.execution_process_id,
-        );
-
-        let approval_id = request.id.clone();
-
-        // Create both the approval waiter (for UI) and a question waiter (for answers)
-        let (_request, approval_waiter) = self
-            .approvals
-            .create_with_waiter(request)
+    ) -> Result<ApprovalOutcome, ExecutorApprovalError> {
+        let waiter = self
+            .waiters
+            .lock()
             .await
-            .map_err(ExecutorApprovalError::request_failed)?;
+            .remove(approval_id)
+            .ok_or_else(|| {
+                ExecutorApprovalError::request_failed(format!(
+                    "no waiter found for approval_id={approval_id}"
+                ))
+            })?;
 
-        let question_waiter = self
-            .approvals
-            .add_question_waiter(&approval_id, self.execution_process_id);
-
-        // Wait for the user to answer, cancel, or timeout
-        let result = tokio::select! {
+        let outcome = tokio::select! {
             _ = cancel.cancelled() => {
-                tracing::info!("Question request cancelled");
-                self.approvals.cancel(&approval_id).await;
-                Err(ExecutorApprovalError::Cancelled)
+                tracing::info!("Approval request cancelled for approval_id={approval_id}");
+                self.approvals.cancel(approval_id).await;
+                return Err(ExecutorApprovalError::Cancelled);
             }
-            status = question_waiter.clone() => {
-                // User submitted answers via the respond endpoint
-                Ok(status)
-            }
-            status = approval_waiter.clone() => {
-                // Approval completed without question answers (denied or timed out)
-                tracing::info!("Question approval completed without answers: {:?}", status);
-                Ok(QuestionStatus::TimedOut)
-            }
+            outcome = waiter => outcome,
         };
 
-        // Clean up
-        self.approvals.cancel(&approval_id).await;
+        Ok(outcome)
+    }
+}
 
-        result
+#[async_trait]
+impl ExecutorApprovalService for ExecutorApprovalBridge {
+    async fn create_tool_approval(&self, tool_name: &str) -> Result<String, ExecutorApprovalError> {
+        self.create_internal(tool_name, false, None).await
+    }
+
+    async fn create_question_approval(
+        &self,
+        tool_name: &str,
+        question_count: usize,
+    ) -> Result<String, ExecutorApprovalError> {
+        self.create_internal(tool_name, true, Some(question_count))
+            .await
+    }
+
+    async fn wait_tool_approval(
+        &self,
+        approval_id: &str,
+        cancel: CancellationToken,
+    ) -> Result<ApprovalStatus, ExecutorApprovalError> {
+        let outcome = self.wait_internal(approval_id, cancel).await?;
+
+        match outcome {
+            ApprovalOutcome::Approved => Ok(ApprovalStatus::Approved),
+            ApprovalOutcome::Denied { reason } => Ok(ApprovalStatus::Denied { reason }),
+            ApprovalOutcome::TimedOut => Ok(ApprovalStatus::TimedOut),
+            ApprovalOutcome::Answered { .. } => Err(ExecutorApprovalError::request_failed(
+                "unexpected question response for permission request",
+            )),
+        }
+    }
+
+    async fn wait_question_answer(
+        &self,
+        approval_id: &str,
+        cancel: CancellationToken,
+    ) -> Result<QuestionStatus, ExecutorApprovalError> {
+        let outcome = self.wait_internal(approval_id, cancel).await?;
+
+        match outcome {
+            ApprovalOutcome::Answered { answers } => Ok(QuestionStatus::Answered { answers }),
+            ApprovalOutcome::TimedOut => Ok(QuestionStatus::TimedOut),
+            ApprovalOutcome::Approved | ApprovalOutcome::Denied { .. } => {
+                Err(ExecutorApprovalError::request_failed(
+                    "unexpected permission response for question request",
+                ))
+            }
+        }
     }
 }

@@ -104,26 +104,37 @@ impl acp::Client for AcpClient {
             .ok_or(ExecutorApprovalError::ServiceUnavailable)
             .map_err(|_| acp::Error::invalid_request())?;
 
-        let status = match approval_service
-            .request_tool_approval(
-                args.tool_call.fields.title.as_deref().unwrap_or("tool"),
-                serde_json::json!({ "tool_call": args.tool_call }),
-                &tool_call_id,
-                self.cancel.clone(),
-            )
-            .await
-        {
-            Ok(s) => s,
+        let tool_title = args.tool_call.fields.title.as_deref().unwrap_or("tool");
+        let approval_id = match approval_service.create_tool_approval(tool_title).await {
+            Ok(id) => id,
             Err(ExecutorApprovalError::Cancelled) => {
-                debug!("ACP approval cancelled for tool_call_id={}", tool_call_id);
+                debug!("ACP approval cancelled for tool_call_id={tool_call_id}");
                 return Ok(acp::RequestPermissionResponse::new(
                     acp::RequestPermissionOutcome::Cancelled,
                 ));
             }
             Err(err) => {
                 tracing::error!(
-                    "ACP approval failed for tool_call_id={}: {err}",
-                    tool_call_id
+                    "ACP approval failed for tool_call_id={tool_call_id}: {err}"
+                );
+                return Err(acp::Error::internal_error());
+            }
+        };
+
+        let status = match approval_service
+            .wait_tool_approval(&approval_id, self.cancel.clone())
+            .await
+        {
+            Ok(s) => s,
+            Err(ExecutorApprovalError::Cancelled) => {
+                debug!("ACP approval cancelled for tool_call_id={tool_call_id}");
+                return Ok(acp::RequestPermissionResponse::new(
+                    acp::RequestPermissionOutcome::Cancelled,
+                ));
+            }
+            Err(err) => {
+                tracing::error!(
+                    "ACP approval failed for tool_call_id={tool_call_id}: {err}"
                 );
                 return Err(acp::Error::internal_error());
             }
@@ -170,10 +181,6 @@ impl acp::Client for AcpClient {
             ApprovalStatus::Pending => {
                 // This should not occur after waiter resolves
                 warn!("Approval resolved to Pending");
-                acp::RequestPermissionOutcome::Cancelled
-            }
-            ApprovalStatus::Answered { .. } => {
-                warn!("Approval was answered");
                 acp::RequestPermissionOutcome::Cancelled
             }
         };

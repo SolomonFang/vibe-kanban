@@ -1380,13 +1380,6 @@ async fn process_event_stream(
                                     .to_string(),
                             ),
                         ),
-                        ApprovalStatus::Answered { .. } => (
-                            "reject",
-                            Some(
-                                "Approval request was answered; proceed without using this tool call."
-                                    .to_string(),
-                            ),
-                        ),
                     };
 
                     // If we reject without a message, OpenCode treats it as a hard stop.
@@ -1445,8 +1438,8 @@ async fn request_permission_approval(
     auto_approve: bool,
     approvals: Option<Arc<dyn ExecutorApprovalService>>,
     tool_name: &str,
-    tool_input: Value,
-    tool_call_id: &str,
+    _tool_input: Value,
+    _tool_call_id: &str,
     cancel: CancellationToken,
 ) -> Result<ApprovalStatus, ExecutorApprovalError> {
     if auto_approve {
@@ -1457,10 +1450,16 @@ async fn request_permission_approval(
         return Ok(ApprovalStatus::Approved);
     };
 
-    match approvals
-        .request_tool_approval(tool_name, tool_input, tool_call_id, cancel)
-        .await
-    {
+    let approval_id = match approvals.create_tool_approval(tool_name).await {
+        Ok(id) => id,
+        Err(
+            ExecutorApprovalError::ServiceUnavailable
+            | ExecutorApprovalError::SessionNotRegistered,
+        ) => return Ok(ApprovalStatus::Approved),
+        Err(err) => return Err(err),
+    };
+
+    match approvals.wait_tool_approval(&approval_id, cancel).await {
         Ok(status) => Ok(status),
         Err(
             ExecutorApprovalError::ServiceUnavailable | ExecutorApprovalError::SessionNotRegistered,

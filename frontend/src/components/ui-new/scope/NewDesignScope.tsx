@@ -10,6 +10,7 @@ import { UserProvider } from '@/contexts/remote/UserContext';
 import { SequenceTrackerProvider } from '@/keyboard/SequenceTracker';
 import { SequenceIndicator } from '@/keyboard/SequenceIndicator';
 import { useWorkspaceShortcuts } from '@/keyboard/useWorkspaceShortcuts';
+import { ApprovalsProvider } from '@/contexts/ApprovalsContext';
 import { ExecutionProcessesProvider } from '@/contexts/ExecutionProcessesContext';
 import { LogsPanelProvider } from '@/contexts/LogsPanelContext';
 import NiceModal from '@ebay/nice-modal-react';
@@ -63,27 +64,29 @@ export function NewDesignScope({ children }: NewDesignScopeProps) {
 
   return (
     <div ref={setContainer} className="new-design h-full">
-      {container && (
-        <PortalContainerContext.Provider value={container}>
-          <WorkspaceProvider>
-            <ExecutionProcessesProviderWrapper>
-              <LogsPanelProvider>
-                <UserProvider>
-                  <ActionsProvider>
-                    <SequenceTrackerProvider>
-                      <SequenceIndicator />
-                      <NiceModal.Provider>
-                        <KeyboardShortcutsHandler />
-                        {children}
-                      </NiceModal.Provider>
-                    </SequenceTrackerProvider>
-                  </ActionsProvider>
-                </UserProvider>
-              </LogsPanelProvider>
-            </ExecutionProcessesProviderWrapper>
-          </WorkspaceProvider>
-        </PortalContainerContext.Provider>
-      )}
+      <WorkspaceProvider>
+        <ApprovalsProvider>
+          <ExecutionProcessesProviderWrapper>
+            <LogsPanelProvider>
+              <UserProvider>
+                <ActionsProvider>
+                  <SequenceTrackerProvider>
+                    <SequenceIndicator />
+                    {container ? (
+                      <PortalContainerContext.Provider value={container}>
+                        <NiceModal.Provider>
+                          <KeyboardShortcutsHandler />
+                          {children}
+                        </NiceModal.Provider>
+                      </PortalContainerContext.Provider>
+                    ) : null}
+                  </SequenceTrackerProvider>
+                </ActionsProvider>
+              </UserProvider>
+            </LogsPanelProvider>
+          </ExecutionProcessesProviderWrapper>
+        </ApprovalsProvider>
+      </WorkspaceProvider>
     </div>
   );
 }

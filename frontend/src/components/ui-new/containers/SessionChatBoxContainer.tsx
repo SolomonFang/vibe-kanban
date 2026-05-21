@@ -4,10 +4,12 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useDropzone } from 'react-dropzone';
 import {
   type Session,
-  type ToolStatus,
   type BaseCodingAgent,
+  type AskUserQuestionItem,
+  ExecutionProcessStatus,
 } from 'shared/types';
 import { useAttemptExecution } from '@/hooks/useAttemptExecution';
+import { useApprovals } from '@/hooks/useApprovals';
 import { useAttemptRepo } from '@/hooks/useAttemptRepo';
 import { useExecutionProcesses } from '@/hooks/useExecutionProcesses';
 import { useUserSystem } from '@/components/ConfigProvider';
@@ -168,28 +170,62 @@ export function SessionChatBoxContainer(props: SessionChatBoxContainerProps) {
   const { entries } = useEntries();
   const tokenUsageInfo = useTokenUsage();
 
-  // Extract pending approval metadata from entries (needed for scratchId)
+  // Execution state
+  const { isAttemptRunning, stopExecution, isStopping, processes } =
+    useAttemptExecution(workspaceId);
+
+  const { pendingApprovals } = useApprovals();
+
   const pendingApproval = useMemo(() => {
-    for (const entry of entries) {
-      if (entry.type !== 'NORMALIZED_ENTRY') continue;
-      const entryType = entry.content.entry_type;
-      if (
-        entryType.type === 'tool_use' &&
-        entryType.status.status === 'pending_approval'
-      ) {
-        const status = entryType.status as Extract<
-          ToolStatus,
-          { status: 'pending_approval' }
-        >;
-        return {
-          approvalId: status.approval_id,
-          timeoutAt: status.timeout_at,
-          executionProcessId: entry.executionProcessId,
-        };
+    const runningIds = new Set(
+      processes
+        .filter((p) => p.status === ExecutionProcessStatus.running)
+        .map((p) => p.id)
+    );
+    const sessionProcessIds = new Set(processes.map((p) => p.id));
+
+    const resolveApproval = (info: (typeof pendingApprovals)[number]) => {
+      let questions: AskUserQuestionItem[] | undefined;
+      for (const entry of entries) {
+        if (entry.type !== 'NORMALIZED_ENTRY') continue;
+        const entryType = entry.content.entry_type;
+        if (
+          entryType.type === 'tool_use' &&
+          entryType.status.status === 'pending_approval' &&
+          entryType.status.approval_id === info.approval_id &&
+          entryType.action_type.action === 'ask_user_question'
+        ) {
+          questions = entryType.action_type.questions;
+          break;
+        }
+      }
+      return {
+        approvalId: info.approval_id,
+        timeoutAt: info.timeout_at,
+        executionProcessId: info.execution_process_id,
+        questions,
+      };
+    };
+
+    for (const info of pendingApprovals) {
+      if (runningIds.has(info.execution_process_id)) {
+        return resolveApproval(info);
       }
     }
+
+    for (const info of pendingApprovals) {
+      if (sessionProcessIds.has(info.execution_process_id)) {
+        return resolveApproval(info);
+      }
+    }
+
+    // Process status can lag behind the approvals WebSocket
+    if (isAttemptRunning && pendingApprovals.length > 0) {
+      return resolveApproval(pendingApprovals[0]);
+    }
+
     return null;
-  }, [entries]);
+  }, [processes, pendingApprovals, entries, isAttemptRunning]);
 
   // Use approval_id as scratch key when pending approval exists to avoid
   // prefilling approval response with queued follow-up message
@@ -199,10 +235,6 @@ export function SessionChatBoxContainer(props: SessionChatBoxContainerProps) {
     }
     return isNewSessionMode ? workspaceId : sessionId;
   }, [pendingApproval?.approvalId, isNewSessionMode, workspaceId, sessionId]);
-
-  // Execution state
-  const { isAttemptRunning, stopExecution, isStopping, processes } =
-    useAttemptExecution(workspaceId);
 
   // Get repos for file search
   const { repos } = useAttemptRepo(workspaceId);

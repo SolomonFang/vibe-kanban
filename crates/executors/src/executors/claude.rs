@@ -466,6 +466,8 @@ pub struct ClaudeLogProcessor {
     model_name: Option<String>,
     // Map tool_use_id -> structured info for follow-up ToolResult replacement
     tool_map: HashMap<String, ClaudeToolCallInfo>,
+    /// Status updates that arrived before the tool_use line was indexed (ApprovalRequested race).
+    pending_status_updates: HashMap<String, ToolStatus>,
     // Strategy controlling how to handle history and user messages
     strategy: HistoryStrategy,
     streaming_messages: HashMap<String, StreamingMessageState>,
@@ -488,6 +490,7 @@ impl ClaudeLogProcessor {
             model_name: None,
             main_model_name: None,
             tool_map: HashMap::new(),
+            pending_status_updates: HashMap::new(),
             strategy,
             streaming_messages: HashMap::new(),
             streaming_message_id: None,
@@ -503,7 +506,7 @@ impl ClaudeLogProcessor {
         status: ToolStatus,
         worktree_path: &str,
         patches: &mut Vec<json_patch::Patch>,
-    ) {
+    ) -> bool {
         if let Some(info) = self.tool_map.get(tool_call_id).cloned() {
             let action_type = Self::extract_action_type(&info.tool_data, worktree_path);
             let entry = NormalizedEntry {
@@ -517,6 +520,42 @@ impl ClaudeLogProcessor {
                 metadata: None,
             };
             patches.push(ConversationPatch::replace(info.entry_index, entry));
+            return true;
+        }
+        false
+    }
+
+    fn apply_tool_status_or_defer(
+        &mut self,
+        tool_call_id: &str,
+        status: ToolStatus,
+        worktree_path: &str,
+        patches: &mut Vec<json_patch::Patch>,
+    ) {
+        if self.replace_tool_entry_status(tool_call_id, status.clone(), worktree_path, patches) {
+            return;
+        }
+        tracing::warn!(
+            tool_call_id = %tool_call_id,
+            "Deferring tool status patch until tool_use is registered in the conversation log"
+        );
+        self.pending_status_updates
+            .insert(tool_call_id.to_string(), status);
+    }
+
+    fn flush_pending_status_for_tool(
+        &mut self,
+        tool_call_id: &str,
+        worktree_path: &str,
+        patches: &mut Vec<json_patch::Patch>,
+    ) {
+        if let Some(status) = self.pending_status_updates.remove(tool_call_id) {
+            if !self.replace_tool_entry_status(tool_call_id, status, worktree_path, patches) {
+                tracing::error!(
+                    tool_call_id = %tool_call_id,
+                    "Failed to apply deferred tool status after tool_use registration"
+                );
+            }
         }
     }
 
@@ -1084,6 +1123,7 @@ impl ClaudeLogProcessor {
                                     content: content_text,
                                 },
                             );
+                            self.flush_pending_status_for_tool(&id, worktree_path, &mut patches);
                             let patch = if is_new {
                                 ConversationPatch::add_normalized_entry(id_num, entry)
                             } else {
@@ -1511,7 +1551,7 @@ impl ClaudeLogProcessor {
                 let requested_at = chrono::Utc::now();
                 let timeout_at =
                     requested_at + chrono::Duration::seconds(APPROVAL_TIMEOUT_SECONDS);
-                self.replace_tool_entry_status(
+                self.apply_tool_status_or_defer(
                     call_id,
                     ToolStatus::PendingApproval {
                         approval_id: approval_id.clone(),
@@ -1528,7 +1568,7 @@ impl ClaudeLogProcessor {
                 approval_status,
             } => {
                 if let Some(status) = ToolStatus::from_approval_status(approval_status) {
-                    self.replace_tool_entry_status(call_id, status, worktree_path, &mut patches);
+                    self.apply_tool_status_or_defer(call_id, status, worktree_path, &mut patches);
                 }
 
                 // Convert denials and timeouts to visible entries (matching Codex behavior)
@@ -1555,7 +1595,6 @@ impl ClaudeLogProcessor {
                         content: format!("Approval timed out for tool {tool_name}"),
                         metadata: None,
                     }),
-                    ApprovalStatus::Answered { .. } => None,
                 };
 
                 if let Some(entry) = entry_opt {
@@ -1569,7 +1608,7 @@ impl ClaudeLogProcessor {
                 question_status,
             } => match question_status {
                 QuestionStatus::Answered { answers } => {
-                    self.replace_tool_entry_status(
+                    self.apply_tool_status_or_defer(
                         call_id,
                         ToolStatus::from_question_status(question_status),
                         worktree_path,
@@ -1601,7 +1640,7 @@ impl ClaudeLogProcessor {
                     ));
                 }
                 QuestionStatus::TimedOut => {
-                    self.replace_tool_entry_status(
+                    self.apply_tool_status_or_defer(
                         call_id,
                         ToolStatus::from_question_status(question_status),
                         worktree_path,

@@ -1,4 +1,4 @@
-import { ExecutorAction, PatchType, Workspace } from 'shared/types';
+import { ExecutorAction, PatchType, TokenUsageInfo, Workspace } from 'shared/types';
 
 export type PatchTypeWithKey = PatchType & {
   patchKey: string;
@@ -77,7 +77,8 @@ export type AddEntryType = 'initial' | 'running' | 'historic' | 'plan';
 export type OnEntriesUpdated = (
   newEntries: PatchTypeWithKey[],
   addType: AddEntryType,
-  loading: boolean
+  loading: boolean,
+  tokenUsage?: TokenUsageInfo | null
 ) => void;
 
 export type ExecutionProcessStaticInfo = {

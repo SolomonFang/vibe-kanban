@@ -64,7 +64,17 @@
     "question": {
       "awaiting": "Awaiting response...",
       "timedOut": "Question timed out",
-      "answered": "Answered {{count}} question(s)"
+      "answered": "Answered {{count}} question(s)",
+      "askUser": {
+        "title": "Ask User Question",
+        "progress": "({{current}}/{{total}})",
+        "multiSelect": "Select multiple",
+        "confirmSelection": "Confirm selection",
+        "other": "Other:",
+        "customPlaceholder": "Type a custom answer and press Enter...",
+        "submit": "Submit",
+        "submitting": "Submitting..."
+      }
     },
     "subagent": {
       "defaultType": "Subagent"
