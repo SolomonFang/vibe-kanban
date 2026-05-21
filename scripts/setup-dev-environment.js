@@ -121,25 +121,6 @@ async function verifyPorts(ports) {
   return frontendAvailable && backendAvailable;
 }
 
-async function assertPortsAvailable(ports, label) {
-  if (await verifyPorts(ports)) return;
-
-  console.error(`\n${label} — ports are already in use:`);
-  console.error(`  Frontend: http://localhost:${ports.frontend}`);
-  console.error(`  Backend:  http://localhost:${ports.backend}`);
-  console.error(
-    "Stop the process using these ports, or change FRONTEND_PORT/BACKEND_PORT in .env"
-  );
-  console.error(
-    "Set DEV_PORTS_DYNAMIC=1 to allow automatic reassignment (breaks browser cache for that origin)."
-  );
-  const err = new Error("Dev ports are not available");
-  if (require.main === module) {
-    process.exit(1);
-  }
-  throw err;
-}
-
 function logPorts(label, ports) {
   if (process.argv[2] === "get") {
     console.log(`${label}:`);
@@ -149,13 +130,55 @@ function logPorts(label, ports) {
 }
 
 /**
+ * Try preferred frontend/backend; if either is busy, bump frontend by 1
+ * (backend follows with the same offset) until a free pair is found.
+ */
+async function resolvePortsBumping(preferredFrontend, preferredBackend, label) {
+  const offset = preferredBackend - preferredFrontend;
+  if (offset < 1) {
+    throw new Error(
+      `Backend port must be greater than frontend (got ${preferredFrontend}/${preferredBackend})`
+    );
+  }
+
+  let frontend = preferredFrontend;
+  const maxAttempts = 200;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const backend = frontend + offset;
+    if (backend > 65535) {
+      throw new Error("No available dev ports found");
+    }
+    const ports = makePorts(frontend, backend);
+    if (await verifyPorts(ports)) {
+      const bumped = frontend - preferredFrontend;
+      if (bumped === 0) {
+        logPorts(label, ports);
+      } else {
+        logPorts(
+          `${label} (${preferredFrontend}/${preferredBackend} busy, +${bumped})`,
+          ports
+        );
+      }
+      savePorts(ports);
+      return ports;
+    }
+    frontend++;
+  }
+
+  throw new Error("No available dev ports found");
+}
+
+/**
  * Allocate ports for development.
  *
  * Priority:
- * 1. FRONTEND_PORT (+ optional BACKEND_PORT) from .env or shell — fixed, never auto-changed
- * 2. PORT from .env or shell — fixed frontend, backend = PORT + 1
- * 3. .dev-ports.json — reused if free; if busy, fail unless DEV_PORTS_DYNAMIC=1
- * 4. Scan from 3000 — only when no saved ports or DEV_PORTS_DYNAMIC=1
+ * 1. FRONTEND_PORT (+ optional BACKEND_PORT) from .env or shell
+ * 2. PORT from .env or shell (backend = PORT + 1)
+ * 3. .dev-ports.json
+ * 4. Default 3000 / 3001
+ *
+ * If the preferred pair is busy, both ports are bumped by +1 until free.
  */
 async function allocatePorts() {
   loadEnvFile();
@@ -165,46 +188,28 @@ async function allocatePorts() {
     const backend = process.env.BACKEND_PORT
       ? parsePort("BACKEND_PORT", process.env.BACKEND_PORT)
       : frontend + 1;
-    const ports = makePorts(frontend, backend);
-    await assertPortsAvailable(ports, "Fixed ports from FRONTEND_PORT/BACKEND_PORT");
-    savePorts(ports);
-    logPorts("Using fixed dev ports from .env", ports);
-    return ports;
+    return resolvePortsBumping(
+      frontend,
+      backend,
+      "Dev ports from FRONTEND_PORT/BACKEND_PORT"
+    );
   }
 
   if (process.env.PORT) {
     const frontend = parsePort("PORT", process.env.PORT);
-    const ports = makePorts(frontend, frontend + 1);
-    await assertPortsAvailable(ports, "Fixed ports from PORT");
-    savePorts(ports);
-    logPorts("Using PORT environment variable", ports);
-    return ports;
+    return resolvePortsBumping(frontend, frontend + 1, "Dev ports from PORT");
   }
 
   const existingPorts = loadPorts();
-  const allowDynamic = process.env.DEV_PORTS_DYNAMIC === "1";
-
   if (existingPorts) {
-    if (await verifyPorts(existingPorts)) {
-      logPorts("Reusing saved dev ports", existingPorts);
-      return existingPorts;
-    }
-    if (!allowDynamic) {
-      await assertPortsAvailable(existingPorts, "Saved dev ports (.dev-ports.json)");
-    }
-    if (process.argv[2] === "get") {
-      console.log(
-        "Saved ports are busy; DEV_PORTS_DYNAMIC=1 — finding new ones..."
-      );
-    }
+    return resolvePortsBumping(
+      existingPorts.frontend,
+      existingPorts.backend,
+      "Dev ports from .dev-ports.json"
+    );
   }
 
-  const frontendPort = await findFreePort(3000);
-  const backendPort = await findFreePort(frontendPort + 1);
-  const ports = makePorts(frontendPort, backendPort);
-  savePorts(ports);
-  logPorts("Allocated new dev ports", ports);
-  return ports;
+  return resolvePortsBumping(3000, 3001, "Default dev ports");
 }
 
 /**
@@ -298,9 +303,8 @@ if (require.main === module) {
         "  node setup-dev-environment.js clear    - Clear saved ports"
       );
       console.log("");
-      console.log("Fixed ports: set FRONTEND_PORT and BACKEND_PORT in .env");
-      console.log("  (see .env.example). Ports will not change while cache stays valid.");
-      console.log("  Set DEV_PORTS_DYNAMIC=1 to allow auto-reassign when ports are busy.");
+      console.log("Preferred ports: set FRONTEND_PORT and BACKEND_PORT in .env");
+      console.log("  (see .env.example). If busy, both ports bump by +1 until free.");
       break;
   }
 }
