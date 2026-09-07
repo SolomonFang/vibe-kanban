@@ -240,12 +240,11 @@ pub async fn create_task_and_start(
         .collect();
     WorkspaceRepo::create_many(&deployment.db().pool, workspace.id, &workspace_repos).await?;
 
-    let is_attempt_running = deployment
+    deployment
         .container()
         .start_workspace(&workspace, payload.executor_profile_id.clone())
         .await
-        .inspect_err(|err| tracing::error!("Failed to start task attempt: {}", err))
-        .is_ok();
+        .inspect_err(|err| tracing::error!("Failed to start task attempt: {}", err))?;
     deployment
         .track_if_analytics_allowed(
             "task_attempt_started",
@@ -265,7 +264,7 @@ pub async fn create_task_and_start(
     tracing::info!("Started attempt for task {}", task.id);
     Ok(ResponseJson(ApiResponse::success(TaskWithAttemptStatus {
         task,
-        has_in_progress_attempt: is_attempt_running,
+        has_in_progress_attempt: true,
         last_attempt_failed: false,
         executor: payload.executor_profile_id.executor.to_string(),
     })))

@@ -703,7 +703,7 @@ pub trait ContainerService {
 
             let worktree_path = self.repo_work_dir(&workspace_dir, &repo);
             if let Some(oid) = target_oid {
-                self.git().reconcile_worktree_to_commit(
+                let outcome = self.git().reconcile_worktree_to_commit(
                     &worktree_path,
                     &oid,
                     git::WorktreeResetOptions::new(
@@ -713,6 +713,26 @@ pub trait ContainerService {
                         perform_git_reset,
                     ),
                 );
+                if outcome.needed && !outcome.applied {
+                    tracing::warn!(
+                        "Failed to reset worktree for repo {} to commit {} during session reset",
+                        repo.name,
+                        oid
+                    );
+                    // Surface the failure in the process logs so it is visible in the UI
+                    let log_message = LogMsg::Stderr(format!(
+                        "Failed to reset repository '{}' to the target commit; the worktree may not match the state of the selected process.",
+                        repo.name
+                    ));
+                    if let Ok(json_line) = serde_json::to_string(&log_message) {
+                        let _ = ExecutionProcessLogs::append_log_line(
+                            pool,
+                            target_process_id,
+                            &format!("{json_line}\n"),
+                        )
+                        .await;
+                    }
+                }
             }
         }
 
@@ -1419,28 +1439,113 @@ pub trait ContainerService {
         };
 
         // Determine the run reason of the next action
-        let next_run_reason = match (action.typ(), next_action.typ()) {
-            (ExecutorActionType::ScriptRequest(_), ExecutorActionType::ScriptRequest(_)) => {
-                ExecutionProcessRunReason::SetupScript
-            }
-            (
-                ExecutorActionType::CodingAgentInitialRequest(_)
-                | ExecutorActionType::CodingAgentFollowUpRequest(_)
-                | ExecutorActionType::ReviewRequest(_),
-                ExecutorActionType::ScriptRequest(_),
-            ) => ExecutionProcessRunReason::CleanupScript,
-            (
-                _,
-                ExecutorActionType::CodingAgentFollowUpRequest(_)
-                | ExecutorActionType::CodingAgentInitialRequest(_)
-                | ExecutorActionType::ReviewRequest(_),
-            ) => ExecutionProcessRunReason::CodingAgent,
-        };
+        let next_run_reason = run_reason_for_next_action(next_action);
 
         self.start_execution(&ctx.workspace, &ctx.session, next_action, &next_run_reason)
             .await?;
 
         tracing::debug!("Started next action: {:?}", next_action);
         Ok(())
+    }
+}
+
+/// Map a chained next action to its execution process run reason, based on the
+/// action itself (for scripts, their `ScriptContext`) rather than the previous
+/// action in the chain.
+fn run_reason_for_next_action(next_action: &ExecutorAction) -> ExecutionProcessRunReason {
+    match next_action.typ() {
+        ExecutorActionType::ScriptRequest(request) => match request.context {
+            ScriptContext::SetupScript | ScriptContext::ToolInstallScript => {
+                ExecutionProcessRunReason::SetupScript
+            }
+            ScriptContext::CleanupScript => ExecutionProcessRunReason::CleanupScript,
+            ScriptContext::ArchiveScript => ExecutionProcessRunReason::ArchiveScript,
+            ScriptContext::DevServer => ExecutionProcessRunReason::DevServer,
+        },
+        ExecutorActionType::CodingAgentFollowUpRequest(_)
+        | ExecutorActionType::CodingAgentInitialRequest(_)
+        | ExecutorActionType::ReviewRequest(_) => ExecutionProcessRunReason::CodingAgent,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use executors::{
+        actions::{
+            ExecutorAction, ExecutorActionType,
+            coding_agent_initial::CodingAgentInitialRequest,
+            script::{ScriptContext, ScriptRequest, ScriptRequestLanguage},
+        },
+        profile::ExecutorProfileId,
+    };
+
+    use super::*;
+
+    fn script_action(context: ScriptContext) -> ExecutorAction {
+        ExecutorAction::new(
+            ExecutorActionType::ScriptRequest(ScriptRequest {
+                script: "echo hi".to_string(),
+                language: ScriptRequestLanguage::Bash,
+                context,
+                working_dir: None,
+            }),
+            None,
+        )
+    }
+
+    #[test]
+    fn cleanup_script_maps_to_cleanup_run_reason() {
+        // Regression: chained cleanup/archive scripts were previously labelled
+        // SetupScript, so try_commit_changes skipped committing their changes.
+        assert_eq!(
+            run_reason_for_next_action(&script_action(ScriptContext::CleanupScript)),
+            ExecutionProcessRunReason::CleanupScript
+        );
+    }
+
+    #[test]
+    fn archive_script_maps_to_archive_run_reason() {
+        assert_eq!(
+            run_reason_for_next_action(&script_action(ScriptContext::ArchiveScript)),
+            ExecutionProcessRunReason::ArchiveScript
+        );
+    }
+
+    #[test]
+    fn setup_and_tool_install_scripts_map_to_setup_run_reason() {
+        assert_eq!(
+            run_reason_for_next_action(&script_action(ScriptContext::SetupScript)),
+            ExecutionProcessRunReason::SetupScript
+        );
+        assert_eq!(
+            run_reason_for_next_action(&script_action(ScriptContext::ToolInstallScript)),
+            ExecutionProcessRunReason::SetupScript
+        );
+    }
+
+    #[test]
+    fn dev_server_script_maps_to_dev_server_run_reason() {
+        assert_eq!(
+            run_reason_for_next_action(&script_action(ScriptContext::DevServer)),
+            ExecutionProcessRunReason::DevServer
+        );
+    }
+
+    #[test]
+    fn coding_agent_action_maps_to_coding_agent_run_reason() {
+        let action = ExecutorAction::new(
+            ExecutorActionType::CodingAgentInitialRequest(CodingAgentInitialRequest {
+                prompt: "do something".to_string(),
+                executor_profile_id: ExecutorProfileId::new(
+                    executors::executors::BaseCodingAgent::ClaudeCode,
+                ),
+                working_dir: None,
+            }),
+            None,
+        );
+        assert_eq!(
+            run_reason_for_next_action(&action),
+            ExecutionProcessRunReason::CodingAgent
+        );
     }
 }

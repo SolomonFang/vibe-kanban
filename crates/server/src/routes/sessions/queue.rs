@@ -2,7 +2,11 @@ use axum::{
     Extension, Json, Router, extract::State, middleware::from_fn_with_state,
     response::Json as ResponseJson, routing::get,
 };
-use db::models::{scratch::DraftFollowUpData, session::Session};
+use db::models::{
+    execution_process::{ExecutionProcess, ExecutionProcessRunReason, ExecutionProcessStatus},
+    scratch::DraftFollowUpData,
+    session::{Session, SessionError},
+};
 use deployment::Deployment;
 use executors::profile::ExecutorProfileId;
 use serde::Deserialize;
@@ -25,6 +29,41 @@ pub async fn queue_message(
     State(deployment): State<DeploymentImpl>,
     Json(payload): Json<QueueMessageRequest>,
 ) -> Result<ResponseJson<ApiResponse<QueueStatus>>, ApiError> {
+    let pool = &deployment.db().pool;
+
+    // A queued message is only consumed when a running execution finishes, so
+    // refuse to queue when no CodingAgent execution is running for this
+    // session; otherwise the message would be stranded forever.
+    let has_running_execution = ExecutionProcess::find_by_session_id(pool, session.id, false)
+        .await?
+        .iter()
+        .any(|process| {
+            process.status == ExecutionProcessStatus::Running
+                && process.run_reason == ExecutionProcessRunReason::CodingAgent
+        });
+    if !has_running_execution {
+        return Err(ApiError::Conflict(
+            "No running execution for this session; cannot queue a follow-up message".to_string(),
+        ));
+    }
+
+    // Validate executor matches session if session has prior executions
+    let expected_executor: Option<String> =
+        ExecutionProcess::latest_executor_profile_for_session(pool, session.id)
+            .await?
+            .map(|profile| profile.executor.to_string())
+            .or_else(|| session.executor.clone());
+
+    if let Some(expected) = expected_executor {
+        let actual = payload.executor_profile_id.executor.to_string();
+        if expected != actual {
+            return Err(ApiError::Session(SessionError::ExecutorMismatch {
+                expected,
+                actual,
+            }));
+        }
+    }
+
     let data = DraftFollowUpData {
         message: payload.message,
         executor_profile_id: payload.executor_profile_id,

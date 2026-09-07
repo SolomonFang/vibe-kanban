@@ -6,9 +6,7 @@ use executors::approvals::{ExecutorApprovalError, ExecutorApprovalService};
 use futures::future::{BoxFuture, Shared};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
-use utils::approvals::{
-    ApprovalOutcome, ApprovalRequest, ApprovalStatus, QuestionStatus,
-};
+use utils::approvals::{ApprovalOutcome, ApprovalRequest, ApprovalStatus, QuestionStatus};
 use uuid::Uuid;
 
 use crate::services::{approvals::Approvals, notification::NotificationService};
@@ -48,10 +46,7 @@ impl ExecutorApprovalBridge {
     ) -> Result<String, ExecutorApprovalError> {
         super::ensure_task_in_review(&self.db.pool, self.execution_process_id).await;
 
-        let request = ApprovalRequest::new(
-            tool_name.to_string(),
-            self.execution_process_id,
-        );
+        let request = ApprovalRequest::new(tool_name.to_string(), self.execution_process_id);
 
         let (request, waiter) = self
             .approvals
@@ -90,9 +85,7 @@ impl ExecutorApprovalBridge {
             )
         };
 
-        self.notification_service
-            .notify(&title, &message)
-            .await;
+        self.notification_service.notify(&title, &message).await;
 
         Ok(approval_id)
     }

@@ -116,6 +116,14 @@ impl StandardCodingAgentExecutor for Amp {
             .apply_to_command(&mut fork_command);
 
         let fork_output = fork_command.output().await?;
+        if !fork_output.status.success() {
+            let stderr_str = String::from_utf8_lossy(&fork_output.stderr);
+            return Err(ExecutorError::Io(std::io::Error::other(format!(
+                "AMP threads fork failed with status {}: {}",
+                fork_output.status,
+                stderr_str.trim()
+            ))));
+        }
         let stdout_str = String::from_utf8_lossy(&fork_output.stdout);
         let new_thread_id = stdout_str
             .lines()

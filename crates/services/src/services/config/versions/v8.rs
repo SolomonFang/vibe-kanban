@@ -150,3 +150,25 @@ impl Default for Config {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dev_assets_seed_config_parses_as_current_version() {
+        // The seed config must parse directly as the current version; otherwise
+        // the migration chain fails and it silently resets to defaults.
+        let seed_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../dev_assets_seed/config.json"
+        );
+        let raw = std::fs::read_to_string(seed_path).expect("seed config should exist");
+        let config: Config = serde_json::from_str(&raw).expect("seed config should parse as v8");
+        assert_eq!(config.config_version, "v8");
+        assert!(matches!(config.theme, ThemeMode::Light));
+        assert!(config.disclaimer_acknowledged);
+        assert!(config.onboarding_acknowledged);
+        assert!(config.notifications.sound_enabled);
+    }
+}

@@ -4,7 +4,9 @@ use db::models::{
     project::Project,
     repo::Repo,
     tag::Tag,
-    task::{CreateTask, Task, TaskPriority, TaskStatus, TaskType, TaskWithAttemptStatus, UpdateTask},
+    task::{
+        CreateTask, Task, TaskPriority, TaskStatus, TaskType, TaskWithAttemptStatus, UpdateTask,
+    },
     workspace::{Workspace, WorkspaceContext},
 };
 use executors::{executors::BaseCodingAgent, profile::ExecutorProfileId};
@@ -1263,9 +1265,7 @@ impl TaskServer {
         TaskServer::success(&response)
     }
 
-    #[tool(
-        description = "Get a project by id, including description and linked repository names."
-    )]
+    #[tool(description = "Get a project by id, including description and linked repository names.")]
     async fn get_project(
         &self,
         Parameters(GetProjectRequest { project_id }): Parameters<GetProjectRequest>,
@@ -1539,12 +1539,8 @@ impl TaskServer {
                 return false;
             }
             if let Some(ref q) = query_filter {
-                let hay = format!(
-                    "{} {}",
-                    t.title,
-                    t.description.as_deref().unwrap_or("")
-                )
-                .to_ascii_lowercase();
+                let hay = format!("{} {}", t.title, t.description.as_deref().unwrap_or(""))
+                    .to_ascii_lowercase();
                 if !hay.contains(q) {
                     return false;
                 }

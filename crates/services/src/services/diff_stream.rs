@@ -56,12 +56,8 @@ pub async fn resolve_base_commit(
 ) -> Option<(Commit, bool)> {
     if !repo.use_worktree
         && let Ok(Some(sha)) =
-            ExecutionProcessRepoState::find_earliest_before_head_commit(
-                pool,
-                workspace.id,
-                repo.id,
-            )
-            .await
+            ExecutionProcessRepoState::find_earliest_before_head_commit(pool, workspace.id, repo.id)
+                .await
         && let Ok(oid) = git2::Oid::from_str(&sha)
     {
         return Some((Commit::new(oid), true));

@@ -24,6 +24,10 @@ pub struct QwenCode {
     #[serde(default)]
     pub append_prompt: AppendPrompt,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "mode")]
+    pub agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub yolo: Option<bool>,
     #[serde(flatten)]
     pub cmd: CmdOverrides,
@@ -59,7 +63,13 @@ impl StandardCodingAgentExecutor for QwenCode {
     ) -> Result<SpawnedChild, ExecutorError> {
         let qwen_command = self.build_command_builder()?.build_initial()?;
         let combined_prompt = self.append_prompt.combine_prompt(prompt);
-        let harness = AcpAgentHarness::with_session_namespace("qwen_sessions");
+        let mut harness = AcpAgentHarness::with_session_namespace("qwen_sessions");
+        if let Some(model) = &self.model {
+            harness = harness.with_model(model);
+        }
+        if let Some(agent) = &self.agent {
+            harness = harness.with_mode(agent);
+        }
         let approvals = if self.yolo.unwrap_or(false) {
             None
         } else {
@@ -87,7 +97,13 @@ impl StandardCodingAgentExecutor for QwenCode {
     ) -> Result<SpawnedChild, ExecutorError> {
         let qwen_command = self.build_command_builder()?.build_follow_up(&[])?;
         let combined_prompt = self.append_prompt.combine_prompt(prompt);
-        let harness = AcpAgentHarness::with_session_namespace("qwen_sessions");
+        let mut harness = AcpAgentHarness::with_session_namespace("qwen_sessions");
+        if let Some(model) = &self.model {
+            harness = harness.with_model(model);
+        }
+        if let Some(agent) = &self.agent {
+            harness = harness.with_mode(agent);
+        }
         let approvals = if self.yolo.unwrap_or(false) {
             None
         } else {
@@ -155,5 +171,42 @@ impl StandardCodingAgentExecutor for QwenCode {
         } else {
             AvailabilityInfo::NotFound
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn model_and_agent_default_to_none() {
+        let qwen: QwenCode = serde_json::from_str("{}").unwrap();
+        assert_eq!(qwen.model, None);
+        assert_eq!(qwen.agent, None);
+        assert_eq!(qwen.yolo, None);
+    }
+
+    #[test]
+    fn deserializes_model_and_agent() {
+        let qwen: QwenCode =
+            serde_json::from_str(r#"{"model":"qwen3-coder-plus","agent":"plan"}"#).unwrap();
+        assert_eq!(qwen.model.as_deref(), Some("qwen3-coder-plus"));
+        assert_eq!(qwen.agent.as_deref(), Some("plan"));
+    }
+
+    #[test]
+    fn agent_accepts_mode_alias() {
+        let qwen: QwenCode = serde_json::from_str(r#"{"mode":"plan"}"#).unwrap();
+        assert_eq!(qwen.agent.as_deref(), Some("plan"));
+    }
+
+    #[test]
+    fn serializes_back_with_field_names() {
+        let qwen: QwenCode =
+            serde_json::from_str(r#"{"model":"qwen3-coder-plus","agent":"plan"}"#).unwrap();
+        let value = serde_json::to_value(&qwen).unwrap();
+        assert_eq!(value["model"], "qwen3-coder-plus");
+        assert_eq!(value["agent"], "plan");
+        assert!(value.get("mode").is_none());
     }
 }

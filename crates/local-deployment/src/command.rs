@@ -6,7 +6,9 @@ pub async fn kill_process_group(child: &mut ChildHandle) -> Result<(), Container
         ChildHandle::Group(child) => utils::process::kill_process_group(child)
             .await
             .map_err(ContainerError::KillFailed),
-        ChildHandle::Pty { child: pty_child, .. } => {
+        ChildHandle::Pty {
+            child: pty_child, ..
+        } => {
             if let Some(pid) = pty_child.process_id() {
                 let mut tw = || {
                     pty_child.try_wait().map(|opt| {
@@ -14,7 +16,7 @@ pub async fn kill_process_group(child: &mut ChildHandle) -> Result<(), Container
                             #[cfg(unix)]
                             {
                                 std::os::unix::process::ExitStatusExt::from_raw(
-                                    es.exit_code() as i32,
+                                    es.exit_code() as i32
                                 )
                             }
                             #[cfg(not(unix))]

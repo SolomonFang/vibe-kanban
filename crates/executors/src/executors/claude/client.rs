@@ -245,10 +245,10 @@ impl ClaudeAgentClient {
         }
         let _ = self
             .log_writer
-            .log_raw(&serde_json::to_string(&ClaudeJson::ApprovalResponse {
+            .log_raw(&serde_json::to_string(&ClaudeJson::ApprovalError {
                 call_id: tool_use_id.to_string(),
                 tool_name: tool_name.to_string(),
-                approval_status: ApprovalStatus::TimedOut,
+                error: err.to_string(),
             })?)
             .await;
         Ok(())
@@ -265,10 +265,10 @@ impl ClaudeAgentClient {
         }
         let _ = self
             .log_writer
-            .log_raw(&serde_json::to_string(&ClaudeJson::QuestionResponse {
+            .log_raw(&serde_json::to_string(&ClaudeJson::ApprovalError {
                 call_id: tool_use_id.to_string(),
                 tool_name: tool_name.to_string(),
-                question_status: QuestionStatus::TimedOut,
+                error: err.to_string(),
             })?)
             .await;
         Ok(())

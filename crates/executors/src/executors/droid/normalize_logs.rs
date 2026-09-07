@@ -468,12 +468,17 @@ pub fn normalize_logs(
                 }
 
                 DroidJson::ToolResult {
-                    id: _,
+                    tool_id,
                     is_error,
                     payload,
                     ..
                 } => {
-                    if let Some(pending_tool_call) = state.pending_fifo.pop_front() {
+                    let pending_tool_call = state
+                        .pending_fifo
+                        .iter()
+                        .position(|pending| pending.tool_call_id() == tool_id)
+                        .and_then(|pos| state.pending_fifo.remove(pos));
+                    if let Some(pending_tool_call) = pending_tool_call {
                         match pending_tool_call {
                             PendingToolCall::Read { tool_call_id } => {
                                 if let Some(mut state) = state.file_reads.remove(&tool_call_id) {
@@ -796,8 +801,6 @@ pub enum ToolResultPayload {
     Value { value: Value },
     Error { error: ToolError },
 }
-
-pub struct EditToolResult {}
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -1223,6 +1226,20 @@ enum PendingToolCall {
     Generic { tool_call_id: ToolCallId },
 }
 
+impl PendingToolCall {
+    fn tool_call_id(&self) -> &str {
+        match self {
+            PendingToolCall::Read { tool_call_id }
+            | PendingToolCall::FileEdit { tool_call_id }
+            | PendingToolCall::CommandRun { tool_call_id }
+            | PendingToolCall::Todo { tool_call_id }
+            | PendingToolCall::Search { tool_call_id }
+            | PendingToolCall::Fetch { tool_call_id }
+            | PendingToolCall::Generic { tool_call_id } => tool_call_id,
+        }
+    }
+}
+
 // Tracks tool-calls from creation to completion updating tool arguments and results as they come in
 #[derive(Debug, Clone)]
 struct ToolCallStates {
@@ -1252,5 +1269,155 @@ impl ToolCallStates {
             pending_fifo: VecDeque::new(),
             model_reported: false,
         }
+    }
+}
+
+/* ===========================
+Tests
+=========================== */
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use workspace_utils::msg_store::MsgStore;
+
+    use super::*;
+
+    fn tool_call_line(id: &str, tool_name: &str, parameters: serde_json::Value) -> String {
+        format!(
+            "{}\n",
+            serde_json::json!({
+                "type": "tool_call",
+                "id": id,
+                "messageId": format!("msg-{id}"),
+                "toolId": id,
+                "toolName": tool_name,
+                "parameters": parameters,
+                "timestamp": 1,
+                "session_id": "sess-1",
+            })
+        )
+    }
+
+    fn tool_result_line(tool_id: &str, is_error: bool, value: serde_json::Value) -> String {
+        format!(
+            "{}\n",
+            serde_json::json!({
+                "type": "tool_result",
+                "messageId": format!("msg-result-{tool_id}"),
+                "toolId": tool_id,
+                "isError": is_error,
+                "value": value,
+                "timestamp": 2,
+                "session_id": "sess-1",
+            })
+        )
+    }
+
+    /// Collect the latest NormalizedEntry emitted for each entry path.
+    fn collect_normalized_entries(msg_store: &MsgStore) -> HashMap<String, NormalizedEntry> {
+        let mut entries = HashMap::new();
+        for msg in msg_store.get_history() {
+            let workspace_utils::log_msg::LogMsg::JsonPatch(patch) = msg else {
+                continue;
+            };
+            let ops = serde_json::to_value(patch).unwrap();
+            for op in ops.as_array().unwrap() {
+                let path = op.get("path").and_then(|p| p.as_str()).unwrap_or_default();
+                if let Some(content) = op
+                    .get("value")
+                    .and_then(|v| v.get("content"))
+                    .filter(|_| path.starts_with("/entries/"))
+                    && let Ok(entry) = serde_json::from_value::<NormalizedEntry>(content.clone())
+                {
+                    entries.insert(path.to_string(), entry);
+                }
+            }
+        }
+        entries
+    }
+
+    #[tokio::test]
+    async fn test_out_of_order_tool_results_match_by_tool_id() {
+        let msg_store = Arc::new(MsgStore::new());
+        let worktree = std::path::PathBuf::from("/tmp/test-worktree");
+
+        // Two parallel tool calls: a read and a command run
+        msg_store.push_stdout(tool_call_line(
+            "Read-1",
+            "Read",
+            serde_json::json!({"file_path": "/tmp/test-worktree/src/main.rs"}),
+        ));
+        msg_store.push_stdout(tool_call_line(
+            "Execute-2",
+            "Execute",
+            serde_json::json!({"command": "ls"}),
+        ));
+        // Results arrive out of order: the failing command result comes first
+        msg_store.push_stdout(tool_result_line(
+            "Execute-2",
+            false,
+            serde_json::json!("some output\n[Process exited with code 1]"),
+        ));
+        msg_store.push_stdout(tool_result_line(
+            "Read-1",
+            false,
+            serde_json::json!("file contents"),
+        ));
+        msg_store.push_finished();
+
+        normalize_logs(
+            msg_store.clone(),
+            &worktree,
+            EntryIndexProvider::start_from(&msg_store),
+        );
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+
+        let entries = collect_normalized_entries(&msg_store);
+
+        // Entry 0 is the read; it must be successful despite the first result being a failure
+        let read_entry = entries.get("/entries/0").expect("missing read entry");
+        let NormalizedEntryType::ToolUse {
+            action_type: ActionType::FileRead { path },
+            status,
+            ..
+        } = &read_entry.entry_type
+        else {
+            panic!(
+                "expected FileRead tool use, got {:?}",
+                read_entry.entry_type
+            );
+        };
+        assert_eq!(path, "src/main.rs");
+        assert!(
+            matches!(status, ToolStatus::Success),
+            "read entry should be successful, got {status:?}"
+        );
+
+        // Entry 1 is the command run; it must carry the failed status and exit code
+        let cmd_entry = entries.get("/entries/1").expect("missing command entry");
+        let NormalizedEntryType::ToolUse {
+            action_type: ActionType::CommandRun { command, result },
+            status,
+            ..
+        } = &cmd_entry.entry_type
+        else {
+            panic!(
+                "expected CommandRun tool use, got {:?}",
+                cmd_entry.entry_type
+            );
+        };
+        assert_eq!(command, "ls");
+        assert!(
+            matches!(status, ToolStatus::Failed),
+            "command entry should have failed, got {status:?}"
+        );
+        let result = result.as_ref().expect("command result missing");
+        assert!(matches!(
+            result.exit_status,
+            Some(CommandExitStatus::ExitCode { code: 1 })
+        ));
     }
 }

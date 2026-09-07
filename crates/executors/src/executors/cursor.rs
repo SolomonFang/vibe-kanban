@@ -41,7 +41,7 @@ pub struct CursorAgent {
     pub force: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(
-        description = "auto, sonnet-4.5, sonnet-4.5-thinking, gpt-5, opus-4.1, grok, composer-1, composer-1.5"
+        description = "auto, sonnet-4.5, sonnet-4.5-thinking, opus-4.5, opus-4.5-thinking, gpt-5.2, gpt-5.2-high, gpt-5.1-codex-max, gpt-5.1-codex-max-high, gemini-3-pro, gemini-3-flash, grok, composer-1, composer-1.5"
     )]
     pub model: Option<String>,
     #[serde(flatten)]

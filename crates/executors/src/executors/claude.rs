@@ -241,10 +241,6 @@ impl ClaudeCode {
 
         Some(serde_json::Value::Object(hooks))
     }
-
-    fn compute_cmd_key(&self) -> String {
-        serde_json::to_string(&self.cmd).unwrap_or_default()
-    }
 }
 
 #[async_trait]
@@ -701,6 +697,7 @@ impl ClaudeLogProcessor {
             ClaudeJson::ApprovalRequested { .. } => None,
             ClaudeJson::ApprovalResponse { .. } => None,
             ClaudeJson::QuestionResponse { .. } => None,
+            ClaudeJson::ApprovalError { .. } => None,
             ClaudeJson::ControlRequest { .. } => None,
             ClaudeJson::ControlResponse { .. } => None,
             ClaudeJson::ControlCancelRequest { .. } => None,
@@ -1660,6 +1657,31 @@ impl ClaudeLogProcessor {
                     ));
                 }
             },
+            ClaudeJson::ApprovalError {
+                call_id,
+                tool_name,
+                error,
+            } => {
+                self.apply_tool_status_or_defer(
+                    call_id,
+                    ToolStatus::Failed,
+                    worktree_path,
+                    &mut patches,
+                );
+
+                let idx = entry_index_provider.next();
+                patches.push(ConversationPatch::add_normalized_entry(
+                    idx,
+                    NormalizedEntry {
+                        timestamp: None,
+                        entry_type: NormalizedEntryType::ErrorMessage {
+                            error_type: NormalizedEntryError::Other,
+                        },
+                        content: format!("Approval request for tool {tool_name} failed: {error}"),
+                        metadata: None,
+                    },
+                ));
+            }
             ClaudeJson::Unknown { data } => {
                 let entry = NormalizedEntry {
                     timestamp: None,
@@ -2059,6 +2081,12 @@ pub enum ClaudeJson {
         call_id: String,
         tool_name: String,
         question_status: QuestionStatus,
+    },
+    ApprovalError {
+        #[serde(alias = "tool_call_id")]
+        call_id: String,
+        tool_name: String,
+        error: String,
     },
     ControlRequest {
         request_id: String,
@@ -2861,6 +2889,54 @@ mod tests {
                 error_type: NormalizedEntryError::Other
             }
         )));
+    }
+
+    #[test]
+    fn test_approval_error_status_update_and_visibility() {
+        let mut processor = ClaudeLogProcessor::new();
+        let provider = EntryIndexProvider::test_new();
+
+        let assistant_with_tool = r#"{
+            "type":"assistant",
+            "message":{
+                "role":"assistant",
+                "content":[
+                    {"type":"tool_use","id":"toolu_123","name":"bash","input":{"command":"echo hi"}}
+                ]
+            }
+        }"#;
+        let parsed_assistant: ClaudeJson = serde_json::from_str(assistant_with_tool).unwrap();
+        let _ = processor.normalize_entries(&parsed_assistant, "/tmp/work", &provider);
+
+        let approval_error = r#"{
+            "type":"approval_error",
+            "tool_call_id":"toolu_123",
+            "tool_name":"Bash",
+            "error":"executor approval service unavailable"
+        }"#;
+        let parsed_error: ClaudeJson = serde_json::from_str(approval_error).unwrap();
+        assert!(matches!(parsed_error, ClaudeJson::ApprovalError { .. }));
+        let error_entries =
+            patches_to_entries(&processor.normalize_entries(&parsed_error, "/tmp/work", &provider));
+        assert_eq!(error_entries.len(), 2);
+        assert!(error_entries.iter().any(|entry| matches!(
+            entry.entry_type,
+            NormalizedEntryType::ToolUse {
+                status: ToolStatus::Failed,
+                ..
+            }
+        )));
+        assert!(error_entries.iter().any(|entry| matches!(
+            entry.entry_type,
+            NormalizedEntryType::ErrorMessage {
+                error_type: NormalizedEntryError::Other
+            }
+        )));
+        assert!(error_entries.iter().any(|entry| {
+            entry
+                .content
+                .contains("executor approval service unavailable")
+        }));
     }
 
     #[test]

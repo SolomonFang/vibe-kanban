@@ -2,10 +2,7 @@ use std::{
     collections::HashMap,
     io,
     path::{Path, PathBuf},
-    sync::{
-        Arc,
-        atomic::AtomicUsize,
-    },
+    sync::{Arc, atomic::AtomicUsize},
     time::Duration,
 };
 
@@ -20,7 +17,7 @@ use db::{
         },
         execution_process_repo_state::ExecutionProcessRepoState,
         repo::Repo,
-        scratch::{DraftFollowUpData, Scratch, ScratchType},
+        scratch::{DraftFollowUpData, Scratch, ScratchPayload, ScratchType, UpdateScratch},
         session::{Session, SessionError},
         task::{Task, TaskStatus},
         workspace::Workspace,
@@ -36,7 +33,9 @@ use executors::{
     },
     approvals::{ExecutorApprovalService, NoopExecutorApprovalService},
     env::{ExecutionEnv, RepoContext},
-    executors::{BaseCodingAgent, CancellationToken, ChildHandle, ExecutorExitResult, ExecutorExitSignal},
+    executors::{
+        BaseCodingAgent, CancellationToken, ChildHandle, ExecutorExitResult, ExecutorExitSignal,
+    },
     logs::{NormalizedEntryType, utils::patch::extract_normalized_entry_from_patch},
 };
 use futures::{FutureExt, StreamExt, TryStreamExt, stream::select};
@@ -582,6 +581,29 @@ impl LocalContainerService {
                                 .await
                             {
                                 tracing::error!("Failed to start queued follow-up: {}", e);
+
+                                // The message was already consumed and its draft scratch
+                                // deleted; restore it so the user's content isn't lost and
+                                // can be edited/resent from the UI.
+                                if let Err(e) = Scratch::update(
+                                    &db.pool,
+                                    ctx.session.id,
+                                    &ScratchType::DraftFollowUp,
+                                    &UpdateScratch {
+                                        payload: ScratchPayload::DraftFollowUp(
+                                            queued_msg.data.clone(),
+                                        ),
+                                    },
+                                )
+                                .await
+                                {
+                                    tracing::error!(
+                                        "Failed to restore queued message to draft scratch for session {}: {}",
+                                        ctx.session.id,
+                                        e
+                                    );
+                                }
+
                                 // Fall back to finalization if follow-up fails
                                 container.finalize_task(&ctx).await;
                             }
@@ -727,7 +749,9 @@ impl LocalContainerService {
                 (out, err)
             }
             ChildHandle::Pty {
-                stdout_rx, stderr_rx, ..
+                stdout_rx,
+                stderr_rx,
+                ..
             } => {
                 let stdout_rx =
                     std::mem::replace(stdout_rx, tokio::sync::mpsc::unbounded_channel().1);
@@ -1229,7 +1253,9 @@ impl ContainerService for LocalContainerService {
                     | BaseCodingAgent::QwenCode
                     | BaseCodingAgent::KimiCli
                     | BaseCodingAgent::DeepseekHarness
-                    | BaseCodingAgent::Opencode,
+                    | BaseCodingAgent::Opencode
+                    | BaseCodingAgent::Reasonix
+                    | BaseCodingAgent::Copilot,
                 ) => ExecutorApprovalBridge::new(
                     self.approvals.clone(),
                     self.db.clone(),
@@ -1318,18 +1344,33 @@ impl ContainerService for LocalContainerService {
         execution_process: &ExecutionProcess,
         status: ExecutionProcessStatus,
     ) -> Result<(), ContainerError> {
-        let child = self
-            .get_child_from_store(&execution_process.id)
-            .await
-            .ok_or_else(|| {
-                ContainerError::Other(anyhow!("Child process not found for execution"))
-            })?;
         let exit_code = if status == ExecutionProcessStatus::Completed {
             Some(0)
         } else {
             None
         };
 
+        let Some(child) = self.get_child_from_store(&execution_process.id).await else {
+            // The child is already gone from the store (e.g. reaped after a
+            // crash or server restart); degrade gracefully by marking the
+            // process finished instead of failing the stop request.
+            tracing::warn!(
+                "Child process not found for execution {}, marking as {:?}",
+                execution_process.id,
+                status
+            );
+            ExecutionProcess::update_completion(
+                &self.db.pool,
+                execution_process.id,
+                status,
+                exit_code,
+            )
+            .await?;
+            if let Some(msg) = self.msg_stores.write().await.remove(&execution_process.id) {
+                msg.push_finished();
+            }
+            return Ok(());
+        };
         ExecutionProcess::update_completion(&self.db.pool, execution_process.id, status, exit_code)
             .await?;
 
@@ -1435,10 +1476,9 @@ impl ContainerService for LocalContainerService {
                     let repo_path = repo.path.clone();
                     let branch = workspace.branch.clone();
                     let sha = merge_commit.sha.clone();
-                    let worktree_path = workspace
-                        .container_ref
-                        .as_ref()
-                        .map(|container_ref| self.repo_work_dir(&PathBuf::from(container_ref), &repo));
+                    let worktree_path = workspace.container_ref.as_ref().map(|container_ref| {
+                        self.repo_work_dir(&PathBuf::from(container_ref), &repo)
+                    });
                     tokio::task::spawn_blocking(move || {
                         diff_stream::has_work_since_merge(
                             &git,

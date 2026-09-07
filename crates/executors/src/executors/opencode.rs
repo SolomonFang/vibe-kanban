@@ -87,7 +87,9 @@ impl Opencode {
         apply_overrides(builder, &self.cmd)
     }
 
-    /// Compute a cache key for model context windows based on configuration that can affect the list of available models.
+    /// Compute a cache key for model context windows derived from the command
+    /// overrides (base command and params), which can affect the list of
+    /// available models. Environment variables are not part of the key.
     fn compute_models_cache_key(&self) -> String {
         serde_json::to_string(&self.cmd).unwrap_or_default()
     }
@@ -484,8 +486,17 @@ fn build_default_permissions(auto_approve: bool) -> String {
 }
 
 fn merge_question_deny(existing_json: &str) -> String {
-    let mut permissions: Map<String, serde_json::Value> =
-        serde_json::from_str(existing_json.trim()).unwrap_or_default();
+    let mut permissions: Map<String, serde_json::Value> = match serde_json::from_str(
+        existing_json.trim(),
+    ) {
+        Ok(permissions) => permissions,
+        Err(err) => {
+            tracing::warn!(
+                "Ignoring invalid OPENCODE_PERMISSION JSON ({err}); falling back to default permissions"
+            );
+            Map::new()
+        }
+    };
 
     permissions.insert(
         "question".to_string(),
@@ -519,4 +530,28 @@ fn merge_compaction_config(existing_json: Option<&str>) -> String {
     config.insert("compaction".to_string(), Value::Object(compaction));
 
     serde_json::to_string(&config).unwrap_or_else(|_| r#"{"compaction":{"auto":true}}"#.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::Value;
+
+    use super::merge_question_deny;
+
+    #[test]
+    fn merge_question_deny_preserves_valid_custom_permissions() {
+        let merged = merge_question_deny(r#"{"bash":"allow","edit":"ask"}"#);
+        let parsed: Value = serde_json::from_str(&merged).unwrap();
+        assert_eq!(parsed.get("bash").and_then(Value::as_str), Some("allow"));
+        assert_eq!(parsed.get("edit").and_then(Value::as_str), Some("ask"));
+        assert_eq!(parsed.get("question").and_then(Value::as_str), Some("deny"));
+    }
+
+    #[test]
+    fn merge_question_deny_falls_back_on_invalid_json() {
+        let merged = merge_question_deny("not valid json");
+        let parsed: Value = serde_json::from_str(&merged).unwrap();
+        assert_eq!(parsed.get("question").and_then(Value::as_str), Some("deny"));
+        assert_eq!(parsed.as_object().unwrap().len(), 1);
+    }
 }

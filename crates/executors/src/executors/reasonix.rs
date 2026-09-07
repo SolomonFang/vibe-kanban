@@ -142,7 +142,10 @@ impl Reasonix {
     }
 
     fn acp_harness(&self) -> AcpAgentHarness {
-        let mut harness = AcpAgentHarness::with_session_namespace(REASONIX_SESSION_NAMESPACE);
+        // reasonix advertises `loadSession`, so follow-ups resume the original
+        // agent session natively instead of forking into a new one.
+        let mut harness = AcpAgentHarness::with_session_namespace(REASONIX_SESSION_NAMESPACE)
+            .with_native_session_resume(true);
         if let Some(model) = &self.model {
             harness = harness.with_model(model.clone());
         }
@@ -324,6 +327,39 @@ impl StandardCodingAgentExecutor for Reasonix {
             AvailabilityInfo::InstallationFound
         } else {
             AvailabilityInfo::NotFound
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        executors::BaseCodingAgent,
+        profile::{ExecutorConfigs, ExecutorProfileId},
+    };
+
+    #[test]
+    fn approvals_profile_uses_code_mode() {
+        // The APPROVALS variant must drive reasonix through ACP code mode so
+        // tool-approval prompts can reach the UI; run mode is one-shot and
+        // non-interactive.
+        let configs = ExecutorConfigs::from_defaults();
+        let agent = configs
+            .get_coding_agent(&ExecutorProfileId::with_variant(
+                BaseCodingAgent::Reasonix,
+                "APPROVALS".to_string(),
+            ))
+            .expect("built-in defaults must contain a REASONIX APPROVALS variant");
+        match agent {
+            crate::executors::CodingAgent::Reasonix(reasonix) => {
+                assert_eq!(reasonix.use_code_mode, Some(true));
+                assert_ne!(
+                    reasonix.dangerously_skip_permissions,
+                    Some(true),
+                    "APPROVALS variant must not skip permission prompts"
+                );
+            }
+            other => panic!("expected Reasonix config, got {other:?}"),
         }
     }
 }

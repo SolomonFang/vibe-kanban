@@ -27,10 +27,7 @@ pub async fn respond_to_approval(
 ) -> Result<ResponseJson<ApiResponse<ApprovalOutcome>>, axum::http::StatusCode> {
     let service = deployment.approvals();
 
-    match service
-        .respond(&deployment.db().pool, &id, request)
-        .await
-    {
+    match service.respond(&deployment.db().pool, &id, request).await {
         Ok((outcome, context)) => {
             deployment
                 .track_if_analytics_allowed(

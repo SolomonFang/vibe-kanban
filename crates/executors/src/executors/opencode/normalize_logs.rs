@@ -3,18 +3,22 @@ use std::{collections::HashMap, path::Path, sync::Arc};
 use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::Value;
-use workspace_utils::{approvals::ApprovalStatus, msg_store::MsgStore, path::make_path_relative};
+use workspace_utils::{
+    approvals::{APPROVAL_TIMEOUT_SECONDS, ApprovalStatus, QuestionStatus},
+    msg_store::MsgStore,
+    path::make_path_relative,
+};
 
 use super::types::{
-    MessageInfo, MessageRole, OpencodeExecutorEvent, Part, PermissionAskedEvent, SdkEvent, SdkTodo,
-    SessionStatus, ToolPart, ToolStateUpdate,
+    MessageInfo, MessageRole, OpencodeExecutorEvent, Part, PermissionAskedEvent, QuestionInfo,
+    SdkEvent, SdkTodo, SessionStatus, ToolPart, ToolStateUpdate,
 };
 use crate::{
     approvals::ToolCallMetadata,
     logs::{
-        ActionType, CommandExitStatus, CommandRunResult, FileChange, NormalizedEntry,
-        NormalizedEntryError, NormalizedEntryType, TodoItem, TokenUsageInfo, ToolResult,
-        ToolStatus,
+        ActionType, AnsweredQuestion, AskUserQuestionItem, AskUserQuestionOption,
+        CommandExitStatus, CommandRunResult, FileChange, NormalizedEntry, NormalizedEntryError,
+        NormalizedEntryType, TodoItem, TokenUsageInfo, ToolResult, ToolStatus,
         stderr_processor::normalize_stderr_logs,
         utils::{
             EntryIndexProvider,
@@ -101,11 +105,37 @@ pub fn normalize_logs(msg_store: Arc<MsgStore>, worktree_path: &Path) {
                         },
                     );
                 }
+                OpencodeExecutorEvent::ApprovalRequested {
+                    tool_call_id,
+                    approval_id,
+                }
+                | OpencodeExecutorEvent::QuestionAsked {
+                    tool_call_id,
+                    approval_id,
+                } => {
+                    state.handle_approval_requested(
+                        &tool_call_id,
+                        approval_id,
+                        &worktree_path,
+                        &msg_store,
+                    );
+                }
                 OpencodeExecutorEvent::ApprovalResponse {
                     tool_call_id,
                     status,
                 } => {
                     state.handle_approval_response(
+                        &tool_call_id,
+                        status,
+                        &worktree_path,
+                        &msg_store,
+                    );
+                }
+                OpencodeExecutorEvent::QuestionResponse {
+                    tool_call_id,
+                    status,
+                } => {
+                    state.handle_question_response(
                         &tool_call_id,
                         status,
                         &worktree_path,
@@ -239,7 +269,12 @@ impl LogState {
             SdkEvent::PermissionAsked(event) => {
                 self.handle_permission_asked(event, worktree_path, msg_store);
             }
+            SdkEvent::QuestionAsked(event) => {
+                self.handle_question_asked(event, worktree_path, msg_store);
+            }
             SdkEvent::PermissionReplied
+            | SdkEvent::QuestionReplied
+            | SdkEvent::QuestionRejected
             | SdkEvent::MessageRemoved
             | SdkEvent::MessagePartRemoved
             | SdkEvent::CommandExecuted
@@ -417,6 +452,7 @@ impl LogState {
                         "Skipping tool part with empty call_id for message_id {}",
                         part.message_id
                     );
+                    return;
                 }
 
                 let tool_state = self
@@ -437,6 +473,32 @@ impl LogState {
             }
             Part::Other => {}
         }
+    }
+
+    fn handle_approval_requested(
+        &mut self,
+        tool_call_id: &str,
+        approval_id: String,
+        worktree_path: &Path,
+        msg_store: &Arc<MsgStore>,
+    ) {
+        let Some(tool_state) = self.tool_states.get_mut(tool_call_id) else {
+            return;
+        };
+
+        tool_state.approval = Some(ApprovalStatus::Pending);
+        tool_state.approval_id = Some(approval_id);
+        tool_state.approval_requested_at = Some(chrono::Utc::now());
+
+        let Some(index) = tool_state.index else {
+            return;
+        };
+
+        replace_normalized_entry(
+            msg_store,
+            index,
+            tool_state.to_normalized_entry(worktree_path),
+        );
     }
 
     fn handle_approval_response(
@@ -560,6 +622,85 @@ impl LogState {
         }
     }
 
+    fn handle_question_response(
+        &mut self,
+        tool_call_id: &str,
+        status: QuestionStatus,
+        worktree_path: &Path,
+        msg_store: &Arc<MsgStore>,
+    ) {
+        if let Some(tool_state) = self.tool_states.get_mut(tool_call_id) {
+            tool_state.set_question_status(status.clone());
+
+            if let Some(index) = tool_state.index {
+                replace_normalized_entry(
+                    msg_store,
+                    index,
+                    tool_state.to_normalized_entry(worktree_path),
+                );
+            }
+        }
+
+        if let QuestionStatus::Answered { answers } = &status {
+            let qa_pairs: Vec<AnsweredQuestion> = answers
+                .iter()
+                .map(|qa| AnsweredQuestion {
+                    question: qa.question.clone(),
+                    answer: qa.answer.clone(),
+                })
+                .collect();
+            self.add_normalized_entry(NormalizedEntry {
+                timestamp: None,
+                entry_type: NormalizedEntryType::UserAnsweredQuestions { answers: qa_pairs },
+                content: format!(
+                    "Answered {} question{}",
+                    answers.len(),
+                    if answers.len() != 1 { "s" } else { "" }
+                ),
+                metadata: None,
+            });
+        }
+    }
+
+    fn handle_question_asked(
+        &mut self,
+        event: super::types::QuestionAskedEvent,
+        worktree_path: &Path,
+        msg_store: &Arc<MsgStore>,
+    ) {
+        let call_id = event
+            .tool
+            .as_ref()
+            .map(|tool| tool.call_id.trim())
+            .filter(|id| !id.is_empty())
+            .unwrap_or_else(|| event.id.trim());
+        if call_id.is_empty() {
+            return;
+        }
+
+        let questions = parse_question_items_from_info(&event.questions);
+        let tool_input = serde_json::json!({ "questions": event.questions });
+
+        let tool_state = self
+            .tool_states
+            .entry(call_id.to_string())
+            .or_insert_with(|| ToolCallState::new(call_id.to_string()));
+
+        tool_state.set_tool_name("question".to_string());
+        tool_state.state = ToolStateStatus::Pending;
+        tool_state.data = ToolData::Question { questions };
+        tool_state.apply_tool_data(Some(tool_input), None, None, None);
+        tool_state.set_approval(ApprovalStatus::Pending);
+
+        let entry = tool_state.to_normalized_entry(worktree_path);
+        if let Some(index) = tool_state.index {
+            replace_normalized_entry(msg_store, index, entry);
+        } else {
+            let index = add_normalized_entry(msg_store, &self.entry_index, entry);
+            tool_state.index = Some(index);
+        }
+    }
+
     fn add_normalized_entry(&mut self, entry: NormalizedEntry) -> usize {
         add_normalized_entry(&self.msg_store, &self.entry_index, entry)
     }
@@ -620,6 +761,9 @@ struct ToolCallState {
     state: ToolStateStatus,
     title: Option<String>,
     approval: Option<ApprovalStatus>,
+    approval_id: Option<String>,
+    approval_requested_at: Option<chrono::DateTime<chrono::Utc>>,
+    question: Option<QuestionStatus>,
     data: ToolData,
 }
 
@@ -657,6 +801,9 @@ enum ToolData {
         subagent_type: Option<String>,
         output: Option<String>,
     },
+    Question {
+        questions: Vec<AskUserQuestionItem>,
+    },
     Other {
         input: Option<Value>,
         metadata: Option<Value>,
@@ -689,6 +836,9 @@ impl ToolCallState {
             state: ToolStateStatus::Unknown,
             title: None,
             approval: None,
+            approval_id: None,
+            approval_requested_at: None,
+            question: None,
             data: ToolData::Other {
                 input: None,
                 metadata: None,
@@ -720,7 +870,14 @@ impl ToolCallState {
         self.approval = Some(approval);
     }
 
+    fn set_question_status(&mut self, question: QuestionStatus) {
+        self.question = Some(question);
+    }
+
     fn tool_status(&self) -> ToolStatus {
+        if let Some(status) = self.question.as_ref().map(ToolStatus::from_question_status) {
+            return status;
+        }
         if let Some(ApprovalStatus::Denied { reason }) = &self.approval {
             return ToolStatus::Denied {
                 reason: reason.clone(),
@@ -728,6 +885,16 @@ impl ToolCallState {
         }
         if matches!(self.approval, Some(ApprovalStatus::TimedOut)) {
             return ToolStatus::TimedOut;
+        }
+        if matches!(self.approval, Some(ApprovalStatus::Pending))
+            && let Some(approval_id) = &self.approval_id
+        {
+            let requested_at = self.approval_requested_at.unwrap_or_else(chrono::Utc::now);
+            return ToolStatus::PendingApproval {
+                approval_id: approval_id.clone(),
+                requested_at,
+                timeout_at: requested_at + chrono::Duration::seconds(APPROVAL_TIMEOUT_SECONDS),
+            };
         }
         match self.state {
             ToolStateStatus::Completed => ToolStatus::Success,
@@ -896,6 +1063,13 @@ impl ToolCallState {
                     *task_output = Some(o);
                 }
             }
+            ToolData::Question { questions } => {
+                if let Some(items) =
+                    input.and_then(|v| v.get("questions").and_then(Value::as_array).cloned())
+                {
+                    *questions = parse_question_items(&items);
+                }
+            }
             ToolData::Unknown => {
                 // Upgrade Unknown to Other when we receive tool data
                 self.data = ToolData::Other {
@@ -980,6 +1154,7 @@ impl ToolCallState {
                 subagent_type: None,
                 output: None,
             },
+            "question" => ToolData::Question { questions: vec![] },
             _ => return,
         };
 
@@ -1080,6 +1255,9 @@ impl ToolCallState {
                     .as_deref()
                     .map(|o| ToolResult::markdown(o.to_string())),
             },
+            ToolData::Question { questions } => ActionType::AskUserQuestion {
+                questions: questions.clone(),
+            },
             ToolData::Unknown => ActionType::Tool {
                 tool_name: self.tool_name.clone(),
                 arguments: None,
@@ -1116,6 +1294,13 @@ impl ToolCallState {
                     "Task".to_string()
                 } else {
                     format!("Task: `{description}`")
+                }
+            }
+            ActionType::AskUserQuestion { questions } => {
+                if questions.len() == 1 {
+                    questions[0].question.clone()
+                } else {
+                    format!("{} questions", questions.len())
                 }
             }
             _ => String::new(),
@@ -1241,5 +1426,215 @@ fn extract_file_path_from_permission_metadata(metadata: &Value) -> Option<&str> 
         None
     } else {
         Some(trimmed)
+    }
+}
+
+fn parse_question_items_from_info(items: &[QuestionInfo]) -> Vec<AskUserQuestionItem> {
+    items
+        .iter()
+        .map(|q| AskUserQuestionItem {
+            question: q.question.clone(),
+            header: q.header.clone(),
+            options: q
+                .options
+                .iter()
+                .map(|o| AskUserQuestionOption {
+                    label: o.label.clone(),
+                    description: o.description.clone(),
+                })
+                .collect(),
+            multi_select: q.multiple.unwrap_or(false),
+        })
+        .collect()
+}
+
+fn parse_question_items(items: &[Value]) -> Vec<AskUserQuestionItem> {
+    let infos: Vec<QuestionInfo> = items
+        .iter()
+        .filter_map(|v| serde_json::from_value(v.clone()).ok())
+        .collect();
+    parse_question_items_from_info(&infos)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::BTreeMap, time::Duration};
+
+    use serde_json::json;
+    use workspace_utils::log_msg::LogMsg;
+
+    use super::*;
+    use crate::logs::utils::patch::extract_normalized_entry_from_patch;
+
+    fn normalized_entries(msg_store: &MsgStore) -> Vec<NormalizedEntry> {
+        let mut entries = BTreeMap::new();
+        for msg in msg_store.get_history() {
+            if let LogMsg::JsonPatch(patch) = msg
+                && let Some((index, entry)) = extract_normalized_entry_from_patch(&patch)
+            {
+                entries.insert(index, entry);
+            }
+        }
+        entries.into_values().collect()
+    }
+
+    async fn normalize_lines(lines: &[String]) -> Vec<NormalizedEntry> {
+        let msg_store = Arc::new(MsgStore::new());
+        normalize_logs(msg_store.clone(), Path::new("/tmp/test-worktree"));
+        for line in lines {
+            msg_store.push_stdout(format!("{line}\n"));
+        }
+        msg_store.push_finished();
+
+        // Wait for the spawned normalization task to drain the stream.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let mut last_len = usize::MAX;
+        loop {
+            let entries = normalized_entries(&msg_store);
+            if entries.len() == last_len || tokio::time::Instant::now() > deadline {
+                return entries;
+            }
+            last_len = entries.len();
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    fn sdk_event_line(event: Value) -> String {
+        json!({ "type": "sdk_event", "event": event }).to_string()
+    }
+
+    fn tool_part_line(call_id: &str, tool: &str, status: &str) -> String {
+        sdk_event_line(json!({
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "type": "tool",
+                    "messageID": "msg-1",
+                    "callID": call_id,
+                    "tool": tool,
+                    "state": { "status": status, "input": {} }
+                }
+            }
+        }))
+    }
+
+    #[tokio::test]
+    async fn skips_tool_parts_with_empty_call_id() {
+        let entries = normalize_lines(&[
+            tool_part_line("", "bash", "running"),
+            tool_part_line("", "edit", "running"),
+            tool_part_line("call-1", "bash", "running"),
+        ])
+        .await;
+
+        let tool_entries: Vec<_> = entries
+            .iter()
+            .filter(|e| matches!(e.entry_type, NormalizedEntryType::ToolUse { .. }))
+            .collect();
+        assert_eq!(
+            tool_entries.len(),
+            1,
+            "empty call_id tool parts must not collapse into one entry: {tool_entries:?}"
+        );
+        assert_eq!(tool_entries[0].content, "bash");
+    }
+
+    #[tokio::test]
+    async fn approval_requested_marks_tool_entry_pending_approval() {
+        let entries = normalize_lines(&[
+            tool_part_line("call-1", "bash", "running"),
+            json!({
+                "type": "approval_requested",
+                "tool_call_id": "call-1",
+                "approval_id": "approval-1"
+            })
+            .to_string(),
+        ])
+        .await;
+
+        let tool_entry = entries
+            .iter()
+            .find(|e| matches!(e.entry_type, NormalizedEntryType::ToolUse { .. }))
+            .expect("missing tool entry");
+        let NormalizedEntryType::ToolUse { status, .. } = &tool_entry.entry_type else {
+            unreachable!()
+        };
+        assert!(
+            matches!(
+                status,
+                ToolStatus::PendingApproval { approval_id, .. } if approval_id == "approval-1"
+            ),
+            "expected pending_approval status, got {status:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn question_events_render_question_tool_and_answers() {
+        let entries = normalize_lines(&[
+            sdk_event_line(json!({
+                "type": "question.asked",
+                "properties": {
+                    "id": "req-1",
+                    "sessionID": "session-1",
+                    "questions": [{
+                        "question": "Which language?",
+                        "header": "Language",
+                        "options": [{ "label": "Rust", "description": "Use Rust" }]
+                    }],
+                    "tool": { "messageID": "msg-1", "callID": "call-1" }
+                }
+            })),
+            json!({
+                "type": "question_asked",
+                "tool_call_id": "call-1",
+                "approval_id": "approval-1"
+            })
+            .to_string(),
+            json!({
+                "type": "question_response",
+                "tool_call_id": "call-1",
+                "status": {
+                    "status": "answered",
+                    "answers": [{ "question": "Which language?", "answer": ["Rust"] }]
+                }
+            })
+            .to_string(),
+        ])
+        .await;
+
+        let tool_entry = entries
+            .iter()
+            .find(|e| {
+                matches!(
+                    &e.entry_type,
+                    NormalizedEntryType::ToolUse { tool_name, .. } if tool_name == "question"
+                )
+            })
+            .expect("missing question tool entry");
+        let NormalizedEntryType::ToolUse {
+            action_type,
+            status,
+            ..
+        } = &tool_entry.entry_type
+        else {
+            unreachable!()
+        };
+        assert!(
+            matches!(action_type, ActionType::AskUserQuestion { questions } if questions.len() == 1),
+            "expected AskUserQuestion action, got {action_type:?}"
+        );
+        assert!(
+            matches!(status, ToolStatus::Success),
+            "expected answered question to be success, got {status:?}"
+        );
+
+        assert!(
+            entries.iter().any(|e| matches!(
+                &e.entry_type,
+                NormalizedEntryType::UserAnsweredQuestions { answers }
+                    if answers.len() == 1 && answers[0].answer == vec!["Rust".to_string()]
+            )),
+            "missing UserAnsweredQuestions entry: {entries:?}"
+        );
     }
 }

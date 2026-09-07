@@ -13,6 +13,7 @@ import {
 import type { BaseCodingAgent, ExecutorConfigs } from 'shared/types';
 import { cn } from '@/lib/utils';
 import { toPrettyCase } from '@/utils/string';
+import { getAgentName } from '@/components/agents/AgentIcon';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -217,7 +218,7 @@ function ExecutorNode({
 
           {/* Executor name */}
           <span className="text-sm font-medium text-high truncate flex-1">
-            {toPrettyCase(executor)}
+            {getAgentName(executor as BaseCodingAgent)}
           </span>
 
           {/* Config count badge */}

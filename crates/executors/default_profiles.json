@@ -328,7 +328,9 @@
         }
       },
       "APPROVALS": {
-        "REASONIX": {}
+        "REASONIX": {
+          "use_code_mode": true
+        }
       }
     },
     "DROID": {

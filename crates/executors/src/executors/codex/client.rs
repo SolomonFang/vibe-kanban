@@ -13,14 +13,15 @@ use codex_app_server_protocol::{
     CommandExecutionRequestApprovalResponse, ConfigReadParams, ConfigReadResponse,
     DynamicToolCallOutputContentItem, DynamicToolCallResponse, FileChangeApprovalDecision,
     FileChangeRequestApprovalResponse, GetAccountParams, GetAccountRateLimitsResponse,
-    GetAccountResponse, InitializeCapabilities, InitializeParams, InitializeResponse, JSONRPCError,
-    JSONRPCNotification, JSONRPCRequest, JSONRPCResponse, ListMcpServerStatusParams,
-    ListMcpServerStatusResponse, RequestId, ReviewStartParams, ReviewStartResponse, ReviewTarget,
-    ServerRequest, ThreadCompactStartParams, ThreadCompactStartResponse, ThreadForkParams,
-    ThreadForkResponse, ThreadReadParams, ThreadReadResponse, ThreadStartParams,
-    ThreadStartResponse, ToolRequestUserInputAnswer, ToolRequestUserInputQuestion,
-    ToolRequestUserInputResponse, TurnCompletedNotification, TurnStartParams, TurnStartResponse,
-    TurnStatus, UserInput,
+    GetAccountResponse, GrantedPermissionProfile, InitializeCapabilities, InitializeParams,
+    InitializeResponse, JSONRPCError, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse,
+    ListMcpServerStatusParams, ListMcpServerStatusResponse, PermissionGrantScope,
+    PermissionsRequestApprovalResponse, RequestId, RequestPermissionProfile, ReviewStartParams,
+    ReviewStartResponse, ReviewTarget, ServerRequest, ThreadCompactStartParams,
+    ThreadCompactStartResponse, ThreadForkParams, ThreadForkResponse, ThreadReadParams,
+    ThreadReadResponse, ThreadStartParams, ThreadStartResponse, ToolRequestUserInputAnswer,
+    ToolRequestUserInputQuestion, ToolRequestUserInputResponse, TurnCompletedNotification,
+    TurnStartParams, TurnStartResponse, TurnStatus, UserInput,
 };
 use futures::TryFutureExt;
 use serde::{Serialize, de::DeserializeOwned};
@@ -36,7 +37,7 @@ use super::jsonrpc::{JsonRpcCallbacks, JsonRpcPeer};
 use crate::{
     approvals::{ExecutorApprovalError, ExecutorApprovalService},
     env::RepoContext,
-    executors::{ExecutorError, codex::normalize_logs::Approval},
+    executors::{ExecutorError, ExecutorExitResult, codex::normalize_logs::Approval},
 };
 
 pub struct AppServerClient {
@@ -352,6 +353,36 @@ impl AppServerClient {
                 send_server_response(peer, request_id, response).await?;
                 Ok(())
             }
+            ServerRequest::PermissionsRequestApproval { request_id, params } => {
+                let call_id = params.item_id.clone();
+                let status = self
+                    .request_tool_approval("permissions", "codex.request_permissions", &call_id)
+                    .await
+                    .inspect_err(|err| {
+                        if !matches!(
+                            err,
+                            ExecutorError::ExecutorApprovalError(ExecutorApprovalError::Cancelled)
+                        ) {
+                            tracing::error!(
+                                "Codex permissions approval failed for item_id={}: {err}",
+                                call_id
+                            );
+                        }
+                    })?;
+                self.log_writer
+                    .log_raw(
+                        &Approval::approval_response(
+                            call_id,
+                            "codex.request_permissions".to_string(),
+                            status.clone(),
+                        )
+                        .raw(),
+                    )
+                    .await?;
+                let response = self.permissions_decision(&status, &params.permissions);
+                send_server_response(peer, request_id, response).await?;
+                Ok(())
+            }
             ServerRequest::DynamicToolCall { request_id, params } => {
                 tracing::warn!(
                     "received unsupported dynamic tool call: tool={} call_id={}",
@@ -372,7 +403,6 @@ impl AppServerClient {
             }
             ServerRequest::ChatgptAuthTokensRefresh { .. }
             | ServerRequest::McpServerElicitationRequest { .. }
-            | ServerRequest::PermissionsRequestApproval { .. }
             | ServerRequest::AttestationGenerate { .. }
             | ServerRequest::CurrentTimeRead { .. } => {
                 tracing::warn!("received unhandled v2 server request: {:?}", request);
@@ -590,6 +620,38 @@ impl AppServerClient {
         }
     }
 
+    fn permissions_decision(
+        &self,
+        status: &ApprovalStatus,
+        requested: &RequestPermissionProfile,
+    ) -> PermissionsRequestApprovalResponse {
+        // Granting echoes back the requested profile; declining returns an empty
+        // profile (the app-server treats an empty grant as a decline).
+        let granted = |scope| PermissionsRequestApprovalResponse {
+            permissions: GrantedPermissionProfile {
+                network: requested.network.clone(),
+                file_system: requested.file_system.clone(),
+            },
+            scope,
+            strict_auto_review: None,
+        };
+
+        if self.auto_approve {
+            return granted(PermissionGrantScope::Session);
+        }
+
+        match status {
+            ApprovalStatus::Approved => granted(PermissionGrantScope::Turn),
+            ApprovalStatus::Denied { .. } | ApprovalStatus::TimedOut | ApprovalStatus::Pending => {
+                PermissionsRequestApprovalResponse {
+                    permissions: GrantedPermissionProfile::default(),
+                    scope: PermissionGrantScope::Turn,
+                    strict_auto_review: None,
+                }
+            }
+        }
+    }
+
     async fn enqueue_feedback(&self, message: String) {
         if message.trim().is_empty() {
             return;
@@ -713,19 +775,32 @@ impl JsonRpcCallbacks for AppServerClient {
         // V2 turn completion detection
         if method == "turn/completed" {
             let mut keep_alive = false;
+            let mut failed = false;
 
             if let Some(params) = notification.params
                 && let Ok(completed) = serde_json::from_value::<TurnCompletedNotification>(params)
-                && completed.turn.status == TurnStatus::Interrupted
             {
-                tracing::debug!("codex turn interrupted; flushing feedback queue");
-                if self.flush_pending_feedback().await {
-                    keep_alive = true;
+                match completed.turn.status {
+                    TurnStatus::Interrupted => {
+                        tracing::debug!("codex turn interrupted; flushing feedback queue");
+                        if self.flush_pending_feedback().await {
+                            keep_alive = true;
+                        }
+                    }
+                    TurnStatus::Failed => {
+                        failed = true;
+                        tracing::error!("codex turn failed: {:?}", completed.turn.error);
+                        self.rpc()
+                            .record_exit_result(ExecutorExitResult::Failure)
+                            .await;
+                    }
+                    _ => {}
                 }
             }
 
             // Handle commit reminder on turn completion
             if !keep_alive
+                && !failed
                 && self.commit_reminder
                 && !self.commit_reminder_sent.swap(true, Ordering::SeqCst)
                 && let status = self.repo_context.check_uncommitted_changes().await
@@ -829,5 +904,85 @@ impl LogWriter {
         guard.write_all(b"\n").await.map_err(ExecutorError::Io)?;
         guard.flush().await.map_err(ExecutorError::Io)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use codex_app_server_protocol::AdditionalNetworkPermissions;
+
+    use super::*;
+
+    fn test_client(auto_approve: bool) -> Arc<AppServerClient> {
+        AppServerClient::new(
+            LogWriter::new(Vec::new()),
+            None,
+            auto_approve,
+            RepoContext::new(PathBuf::from("/tmp/test-worktree"), vec![]),
+            false,
+            String::new(),
+            CancellationToken::new(),
+        )
+    }
+
+    fn requested_permissions() -> RequestPermissionProfile {
+        RequestPermissionProfile {
+            network: Some(AdditionalNetworkPermissions {
+                enabled: Some(true),
+            }),
+            file_system: None,
+        }
+    }
+
+    #[test]
+    fn permissions_decision_grants_requested_profile_on_approval() {
+        let client = test_client(false);
+        let response =
+            client.permissions_decision(&ApprovalStatus::Approved, &requested_permissions());
+
+        assert_eq!(
+            response.permissions.network,
+            requested_permissions().network
+        );
+        assert_eq!(response.scope, PermissionGrantScope::Turn);
+        assert_eq!(response.strict_auto_review, None);
+    }
+
+    #[test]
+    fn permissions_decision_declines_with_empty_profile_on_denial() {
+        let client = test_client(false);
+        let response = client.permissions_decision(
+            &ApprovalStatus::Denied {
+                reason: Some("no".to_string()),
+            },
+            &requested_permissions(),
+        );
+
+        assert_eq!(response.permissions, GrantedPermissionProfile::default());
+        assert_eq!(response.scope, PermissionGrantScope::Turn);
+    }
+
+    #[test]
+    fn permissions_decision_declines_with_empty_profile_on_timeout() {
+        let client = test_client(false);
+        let response =
+            client.permissions_decision(&ApprovalStatus::TimedOut, &requested_permissions());
+
+        assert_eq!(response.permissions, GrantedPermissionProfile::default());
+    }
+
+    #[test]
+    fn permissions_decision_grants_session_scope_when_auto_approve() {
+        let client = test_client(true);
+        let response =
+            client.permissions_decision(&ApprovalStatus::Approved, &requested_permissions());
+
+        assert_eq!(
+            response.permissions.network,
+            requested_permissions().network
+        );
+        assert_eq!(response.scope, PermissionGrantScope::Session);
     }
 }

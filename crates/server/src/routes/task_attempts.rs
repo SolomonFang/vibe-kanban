@@ -313,13 +313,11 @@ pub async fn create_task_attempt(
         .collect();
 
     WorkspaceRepo::create_many(pool, workspace.id, &workspace_repos).await?;
-    if let Err(err) = deployment
+    deployment
         .container()
         .start_workspace(&workspace, executor_profile_id.clone())
         .await
-    {
-        tracing::error!("Failed to start task attempt: {}", err);
-    }
+        .inspect_err(|err| tracing::error!("Failed to start task attempt: {}", err))?;
 
     deployment
         .track_if_analytics_allowed(

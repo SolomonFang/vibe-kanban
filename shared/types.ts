@@ -583,7 +583,7 @@ auto_approve: boolean,
  */
 auto_compact: boolean, base_command_override?: string | null, additional_params?: Array<string> | null, env?: { [key in string]?: string } | null, };
 
-export type QwenCode = { append_prompt: AppendPrompt, yolo?: boolean | null, base_command_override?: string | null, additional_params?: Array<string> | null, env?: { [key in string]?: string } | null, };
+export type QwenCode = { append_prompt: AppendPrompt, model?: string | null, agent?: string | null, yolo?: boolean | null, base_command_override?: string | null, additional_params?: Array<string> | null, env?: { [key in string]?: string } | null, };
 
 export type KimiCli = { append_prompt: AppendPrompt, mode?: KimiMode | null, model?: string | null, base_command_override?: string | null, additional_params?: Array<string> | null, env?: { [key in string]?: string } | null, };
 

@@ -84,6 +84,11 @@ impl Droid {
         use crate::command::{CommandBuilder, apply_overrides};
         let mut builder =
             CommandBuilder::new("droid exec").params(["--output-format", "stream-json"]);
+        if self.autonomy == Autonomy::Normal {
+            tracing::warn!(
+                "Droid autonomy 'normal' requires interactive approval, which is unavailable in headless `droid exec` runs; the process is likely to hang or fail. Use low/medium/high or skip-permissions-unsafe instead."
+            );
+        }
         builder = match &self.autonomy {
             Autonomy::Normal => builder,
             Autonomy::Low => builder.extend_params(["--auto", "low"]),
@@ -118,7 +123,6 @@ async fn spawn_droid(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .current_dir(current_dir)
-        .env("NPM_CONFIG_LOGLEVEL", "error")
         .args(args);
 
     env.clone()

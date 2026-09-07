@@ -490,6 +490,56 @@ impl AcpAgentHarness {
             }
         });
 
+        Self::drive_acp_connection(
+            outgoing,
+            incoming,
+            cwd,
+            existing_session,
+            reset_to_message_id,
+            prompt,
+            exit_signal,
+            session_namespace,
+            model,
+            mode,
+            native_session_resume,
+            tool_auto_approve,
+            approvals,
+            cancel,
+            log_tx,
+            shutdown_tx,
+        )
+        .await;
+
+        Ok(())
+    }
+
+    /// Drive the ACP protocol over the given byte streams: initialize, create
+    /// or resume a session, then run the prompt loop until completion. The
+    /// exit result is reported through `exit_signal`; every early-return path
+    /// must send `ExecutorExitResult::Failure` explicitly because the
+    /// container treats a silently dropped channel as success.
+    #[allow(clippy::too_many_arguments)]
+    async fn drive_acp_connection<W, R>(
+        outgoing: W,
+        incoming: R,
+        cwd: PathBuf,
+        existing_session: Option<String>,
+        reset_to_message_id: Option<String>,
+        prompt: String,
+        exit_signal: Option<tokio::sync::oneshot::Sender<ExecutorExitResult>>,
+        session_namespace: String,
+        model: Option<String>,
+        mode: Option<String>,
+        native_session_resume: bool,
+        tool_auto_approve: bool,
+        approvals: Option<std::sync::Arc<dyn ExecutorApprovalService>>,
+        cancel: CancellationToken,
+        log_tx: mpsc::UnboundedSender<String>,
+        shutdown_tx: tokio::sync::watch::Sender<bool>,
+    ) where
+        W: futures::AsyncWrite + Unpin + Send + 'static,
+        R: futures::AsyncRead + Unpin + Send + 'static,
+    {
         let mut exit_signal_tx = exit_signal;
 
         // Run ACP client in a LocalSet
@@ -513,6 +563,7 @@ impl AcpAgentHarness {
                             Ok(sm) => sm,
                             Err(e) => {
                                 error!("Failed to create session manager: {}", e);
+                                signal_exit_failure(&mut exit_signal_tx);
                                 return;
                             }
                         };
@@ -565,6 +616,7 @@ impl AcpAgentHarness {
                                 error!("Failed to initialize ACP connection: {e}");
                                 let _ = log_tx
                                     .send(AcpEvent::Error(format!("{e}")).to_string());
+                                signal_exit_failure(&mut exit_signal_tx);
                                 return;
                             }
                         };
@@ -648,6 +700,7 @@ impl AcpAgentHarness {
                                         }
                                         Err(e) => {
                                             error!("Failed to create session: {}", e);
+                                            signal_exit_failure(&mut exit_signal_tx);
                                             return;
                                         }
                                     }
@@ -664,6 +717,7 @@ impl AcpAgentHarness {
                                     }
                                     Err(e) => {
                                         error!("Failed to create session: {}", e);
+                                        signal_exit_failure(&mut exit_signal_tx);
                                         return;
                                     }
                                 }
@@ -708,6 +762,7 @@ impl AcpAgentHarness {
                                     error!("Failed to set session mode: {e}");
                                     let _ = log_tx
                                         .send(AcpEvent::Error(format!("{e}")).to_string());
+                                    signal_exit_failure(&mut exit_signal_tx);
                                     return;
                                 }
                             }
@@ -760,6 +815,11 @@ impl AcpAgentHarness {
                         );
 
                         let mut current_req = Some(initial_req);
+                        // Tracks ACP-level prompt failures so the run is
+                        // reported as failed instead of silently succeeding.
+                        // User/approval cancellation breaks out of the loop
+                        // without setting this flag.
+                        let mut prompt_failed = false;
 
                         while let Some(req) = current_req.take() {
                             if cancel.is_cancelled() {
@@ -785,6 +845,7 @@ impl AcpAgentHarness {
                                     let _ = log_tx.send(AcpEvent::Done(stop_reason).to_string());
                                 }
                                 Err(e) => {
+                                    prompt_failed = true;
                                     tracing::debug!("error {} {e} {:?}", e.code, e.data);
                                     if e.code
                                         == agent_client_protocol::ErrorCode::INTERNAL_ERROR.code
@@ -822,7 +883,11 @@ impl AcpAgentHarness {
 
                         // Notify container of completion
                         if let Some(tx) = exit_signal_tx.take() {
-                            let _ = tx.send(ExecutorExitResult::Success);
+                            let _ = tx.send(if prompt_failed {
+                                ExecutorExitResult::Failure
+                            } else {
+                                ExecutorExitResult::Success
+                            });
                         }
 
                         // Cancel session work
@@ -841,7 +906,258 @@ impl AcpAgentHarness {
                     .await;
             });
         });
+    }
+}
 
-        Ok(())
+/// Signal a failed run through the exit channel. Early-return paths must send
+/// this explicitly: silently dropping the channel makes the container assume
+/// success ("channel closed, assume success").
+fn signal_exit_failure(
+    exit_signal_tx: &mut Option<tokio::sync::oneshot::Sender<ExecutorExitResult>>,
+) {
+    if let Some(tx) = exit_signal_tx.take() {
+        let _ = tx.send(ExecutorExitResult::Failure);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+
+    use super::*;
+
+    /// In-process ACP agent whose per-method behavior is scripted via flags.
+    #[derive(Default)]
+    struct MockAgent {
+        fail_initialize: bool,
+        fail_new_session: bool,
+        fail_prompt: bool,
+        hang_on_prompt: bool,
+        cancel_notify: std::sync::Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait::async_trait(?Send)]
+    impl proto::Agent for MockAgent {
+        async fn initialize(
+            &self,
+            args: proto::InitializeRequest,
+        ) -> proto::Result<proto::InitializeResponse> {
+            if self.fail_initialize {
+                return Err(proto::Error::internal_error().data("mock initialize failure"));
+            }
+            Ok(proto::InitializeResponse::new(args.protocol_version))
+        }
+
+        async fn authenticate(
+            &self,
+            _args: proto::AuthenticateRequest,
+        ) -> proto::Result<proto::AuthenticateResponse> {
+            Ok(proto::AuthenticateResponse::default())
+        }
+
+        async fn new_session(
+            &self,
+            _args: proto::NewSessionRequest,
+        ) -> proto::Result<proto::NewSessionResponse> {
+            if self.fail_new_session {
+                return Err(proto::Error::internal_error().data("mock new_session failure"));
+            }
+            Ok(proto::NewSessionResponse::new(proto::SessionId::new(
+                "mock-session",
+            )))
+        }
+
+        async fn prompt(
+            &self,
+            _args: proto::PromptRequest,
+        ) -> proto::Result<proto::PromptResponse> {
+            if self.hang_on_prompt {
+                // Per the ACP spec, a cancelled turn responds to the pending
+                // prompt with StopReason::Cancelled. Responding also lets the
+                // harness finish its connection cleanup.
+                self.cancel_notify.notified().await;
+                return Ok(proto::PromptResponse::new(proto::StopReason::Cancelled));
+            }
+            if self.fail_prompt {
+                return Err(proto::Error::internal_error().data("mock prompt failure"));
+            }
+            Ok(proto::PromptResponse::new(proto::StopReason::EndTurn))
+        }
+
+        async fn cancel(&self, _args: proto::CancelNotification) -> proto::Result<()> {
+            self.cancel_notify.notify_waiters();
+            Ok(())
+        }
+    }
+
+    /// Wire the harness to a mock agent over in-memory duplex streams and
+    /// return the exit result the harness reports.
+    async fn run_harness(
+        agent: MockAgent,
+        mode: Option<String>,
+        cancel_after: Option<Duration>,
+    ) -> ExecutorExitResult {
+        let (harness_outgoing, agent_incoming) = tokio::io::duplex(64 * 1024);
+        let (agent_outgoing, harness_incoming) = tokio::io::duplex(64 * 1024);
+
+        // The ACP connection requires a LocalSet, so the mock agent runs on
+        // its own current-thread runtime.
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build runtime");
+            rt.block_on(async move {
+                let local = tokio::task::LocalSet::new();
+                local
+                    .run_until(async move {
+                        let (_conn, io_fut) = proto::AgentSideConnection::new(
+                            agent,
+                            agent_outgoing.compat_write(),
+                            agent_incoming.compat(),
+                            |fut| {
+                                tokio::task::spawn_local(fut);
+                            },
+                        );
+                        let _ = io_fut.await;
+                    })
+                    .await;
+            });
+        });
+
+        let (log_tx, mut log_rx) = mpsc::unbounded_channel::<String>();
+        tokio::spawn(async move { while log_rx.recv().await.is_some() {} });
+
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+        let (exit_tx, exit_rx) = tokio::sync::oneshot::channel();
+        let cancel = CancellationToken::new();
+        let session_namespace = format!("acp_harness_test_{}", uuid::Uuid::new_v4());
+
+        AcpAgentHarness::drive_acp_connection(
+            harness_outgoing.compat_write(),
+            harness_incoming.compat(),
+            PathBuf::from("/tmp"),
+            None,
+            None,
+            "test prompt".to_string(),
+            Some(exit_tx),
+            session_namespace.clone(),
+            None,
+            mode,
+            false,
+            false,
+            None,
+            cancel.clone(),
+            log_tx,
+            shutdown_tx,
+        )
+        .await;
+
+        if let Some(delay) = cancel_after {
+            tokio::time::sleep(delay).await;
+            cancel.cancel();
+        }
+
+        let result = tokio::time::timeout(Duration::from_secs(10), exit_rx)
+            .await
+            .expect("harness did not signal exit in time")
+            .expect("exit channel closed without a result");
+
+        // Clean up the session directory created by SessionManager.
+        if let Some(home) = dirs::home_dir() {
+            let mut dir = home.join(".vibe-kanban");
+            if cfg!(debug_assertions) {
+                dir = dir.join("dev");
+            }
+            let _ = std::fs::remove_dir_all(dir.join(&session_namespace));
+        }
+
+        result
+    }
+
+    /// Run a harness scenario on a throwaway runtime. The harness drives the
+    /// ACP connection on a `spawn_blocking` thread whose cleanup can outlive
+    /// the signaled exit result (in production the container kills the child
+    /// process, which unblocks it), so shut the runtime down with a timeout
+    /// instead of waiting for that thread indefinitely.
+    fn run_scenario(
+        agent: MockAgent,
+        mode: Option<String>,
+        cancel_after: Option<Duration>,
+    ) -> ExecutorExitResult {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build runtime");
+        let result = rt.block_on(run_harness(agent, mode, cancel_after));
+        rt.shutdown_timeout(Duration::from_secs(2));
+        result
+    }
+
+    #[test]
+    fn signals_success_when_prompt_completes() {
+        let result = run_scenario(MockAgent::default(), None, None);
+        assert!(matches!(result, ExecutorExitResult::Success));
+    }
+
+    #[test]
+    fn signals_failure_when_initialize_fails() {
+        let result = run_scenario(
+            MockAgent {
+                fail_initialize: true,
+                ..Default::default()
+            },
+            None,
+            None,
+        );
+        assert!(matches!(result, ExecutorExitResult::Failure));
+    }
+
+    #[test]
+    fn signals_failure_when_new_session_fails() {
+        let result = run_scenario(
+            MockAgent {
+                fail_new_session: true,
+                ..Default::default()
+            },
+            None,
+            None,
+        );
+        assert!(matches!(result, ExecutorExitResult::Failure));
+    }
+
+    #[test]
+    fn signals_failure_when_prompt_returns_acp_error() {
+        let result = run_scenario(
+            MockAgent {
+                fail_prompt: true,
+                ..Default::default()
+            },
+            None,
+            None,
+        );
+        assert!(matches!(result, ExecutorExitResult::Failure));
+    }
+
+    #[test]
+    fn signals_failure_when_session_mode_is_rejected() {
+        // The default Agent::set_session_mode returns method_not_found.
+        let result = run_scenario(MockAgent::default(), Some("plan".to_string()), None);
+        assert!(matches!(result, ExecutorExitResult::Failure));
+    }
+
+    #[test]
+    fn cancellation_does_not_signal_failure() {
+        let result = run_scenario(
+            MockAgent {
+                hang_on_prompt: true,
+                ..Default::default()
+            },
+            None,
+            Some(Duration::from_millis(500)),
+        );
+        assert!(matches!(result, ExecutorExitResult::Success));
     }
 }

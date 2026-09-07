@@ -40,12 +40,22 @@ pub enum PendingResponse {
 #[derive(Clone)]
 pub struct ExitSignalSender {
     inner: Arc<Mutex<Option<oneshot::Sender<ExecutorExitResult>>>>,
+    recorded_result: Arc<Mutex<ExecutorExitResult>>,
 }
 
 impl ExitSignalSender {
     pub fn new(sender: oneshot::Sender<ExecutorExitResult>) -> Self {
         Self {
             inner: Arc::new(Mutex::new(Some(sender))),
+            recorded_result: Arc::new(Mutex::new(ExecutorExitResult::Success)),
+        }
+    }
+
+    /// Records the session outcome without sending the exit signal. A recorded
+    /// failure is sticky: later recordings cannot downgrade it to success.
+    pub async fn record_exit_result(&self, result: ExecutorExitResult) {
+        if matches!(result, ExecutorExitResult::Failure) {
+            *self.recorded_result.lock().await = result;
         }
     }
 
@@ -54,6 +64,13 @@ impl ExitSignalSender {
             let _ = sender.send(result);
         }
     }
+
+    /// Sends the exit signal with the recorded result (`Success` unless a
+    /// failure was recorded beforehand).
+    pub async fn send_recorded_exit_signal(&self) {
+        let result = *self.recorded_result.lock().await;
+        self.send_exit_signal(result).await;
+    }
 }
 
 #[derive(Clone)]
@@ -61,6 +78,7 @@ pub struct JsonRpcPeer {
     stdin: Arc<Mutex<ChildStdin>>,
     pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<PendingResponse>>>>,
     id_counter: Arc<AtomicI64>,
+    exit_tx: ExitSignalSender,
 }
 
 impl JsonRpcPeer {
@@ -75,6 +93,7 @@ impl JsonRpcPeer {
             stdin: Arc::new(Mutex::new(stdin)),
             pending: Arc::new(Mutex::new(HashMap::new())),
             id_counter: Arc::new(AtomicI64::new(1)),
+            exit_tx: exit_tx.clone(),
         };
 
         let reader_peer = peer.clone();
@@ -166,7 +185,7 @@ impl JsonRpcPeer {
                 }
             }
 
-            exit_tx.send_exit_signal(ExecutorExitResult::Success).await;
+            exit_tx.send_recorded_exit_signal().await;
             let _ = reader_peer.shutdown().await;
         });
 
@@ -195,6 +214,12 @@ impl JsonRpcPeer {
             let _ = sender.send(PendingResponse::Shutdown);
         }
         Ok(())
+    }
+
+    /// Records the session outcome to report when the connection ends without
+    /// an explicit exit signal.
+    pub async fn record_exit_result(&self, result: ExecutorExitResult) {
+        self.exit_tx.record_exit_result(result).await;
     }
 
     pub async fn send<T>(&self, message: &T) -> Result<(), ExecutorError>
@@ -303,4 +328,53 @@ pub trait JsonRpcCallbacks: Send + Sync {
     ) -> Result<bool, ExecutorError>;
 
     async fn on_non_json(&self, _raw: &str) -> Result<(), ExecutorError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn recorded_exit_signal_defaults_to_success() {
+        let (tx, rx) = oneshot::channel();
+        let sender = ExitSignalSender::new(tx);
+
+        sender.send_recorded_exit_signal().await;
+
+        assert!(matches!(rx.await, Ok(ExecutorExitResult::Success)));
+    }
+
+    #[tokio::test]
+    async fn recorded_failure_is_reported_on_stream_end() {
+        let (tx, rx) = oneshot::channel();
+        let sender = ExitSignalSender::new(tx);
+
+        sender.record_exit_result(ExecutorExitResult::Failure).await;
+        sender.send_recorded_exit_signal().await;
+
+        assert!(matches!(rx.await, Ok(ExecutorExitResult::Failure)));
+    }
+
+    #[tokio::test]
+    async fn recorded_failure_is_sticky() {
+        let (tx, rx) = oneshot::channel();
+        let sender = ExitSignalSender::new(tx);
+
+        sender.record_exit_result(ExecutorExitResult::Failure).await;
+        sender.record_exit_result(ExecutorExitResult::Success).await;
+        sender.send_recorded_exit_signal().await;
+
+        assert!(matches!(rx.await, Ok(ExecutorExitResult::Failure)));
+    }
+
+    #[tokio::test]
+    async fn explicit_exit_signal_ignores_recorded_result() {
+        let (tx, rx) = oneshot::channel();
+        let sender = ExitSignalSender::new(tx);
+
+        sender.record_exit_result(ExecutorExitResult::Failure).await;
+        sender.send_exit_signal(ExecutorExitResult::Success).await;
+
+        assert!(matches!(rx.await, Ok(ExecutorExitResult::Success)));
+    }
 }

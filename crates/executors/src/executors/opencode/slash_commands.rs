@@ -501,6 +501,7 @@ pub async fn execute(
     };
 
     let (control_tx, mut control_rx) = mpsc::unbounded_channel::<ControlEvent>();
+    let pending_approvals = sdk::PendingApprovals::new();
     let event_resp = tokio::select! {
         _ = cancel.cancelled() => return Ok(()),
         res = sdk::connect_event_stream(&client, &config.base_url, &config.directory, None) => res?,
@@ -515,6 +516,7 @@ pub async fn execute(
             approvals: config.approvals.clone(),
             auto_approve: config.auto_approve,
             control_tx,
+            pending_approvals: pending_approvals.clone(),
             models_cache_key: config.models_cache_key.clone(),
             cancel: cancel.clone(),
         },
@@ -563,8 +565,13 @@ pub async fn execute(
         _ => unreachable!("handled non-session commands earlier"),
     };
 
-    let request_result =
-        sdk::run_request_with_control(request_fut, &mut control_rx, cancel.clone()).await;
+    let request_result = sdk::run_request_with_control(
+        request_fut,
+        &mut control_rx,
+        &pending_approvals,
+        cancel.clone(),
+    )
+    .await;
 
     if cancel.is_cancelled() {
         sdk::send_abort(&client, &config.base_url, &config.directory, &session_id).await;
@@ -579,11 +586,13 @@ pub async fn execute(
         &config,
         &log_writer,
         &mut control_rx,
+        &pending_approvals,
         cancel.clone(),
         &session_id,
         model,
     )
     .await;
+    let _ = pending_approvals.wait(cancel.clone()).await;
     event_handle.abort();
     log_writer.log_event(&OpencodeExecutorEvent::Done).await?;
 

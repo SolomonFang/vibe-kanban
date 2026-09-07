@@ -30,7 +30,7 @@ import {
   TwoColumnPickerEmpty,
 } from './SettingsComponents';
 import { useSettingsDirty } from './SettingsDirtyContext';
-import { AgentIcon } from '@/components/agents/AgentIcon';
+import { AgentIcon, getAgentName } from '@/components/agents/AgentIcon';
 import { areProfilesEqual } from '@/utils/executor';
 
 type ExecutorsMap = Record<string, Record<string, Record<string, unknown>>>;
@@ -415,7 +415,7 @@ export function AgentsSettingsSection() {
                       )
                     }
                   >
-                    {toPrettyCase(executor)}
+                    {getAgentName(executor as BaseCodingAgent)}
                   </TwoColumnPickerItem>
                 );
               })}
